@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+:root {
+  --color-canvas: #f4efe4;
+  --color-canvas-2: #ece5d6;
+  --color-card: #fbf8f0;
+  --color-ink: #1f2a2a;
+  --color-ink-soft: #5a655f;
+  --color-teal: #1a7a72;
+  --color-teal-dark: #145f59;
+  --color-border: #ddd4bf;
+}
+
+@theme inline {
+  --color-canvas: var(--color-canvas);
+  --color-canvas-2: var(--color-canvas-2);
+  --color-card: var(--color-card);
+  --color-ink: var(--color-ink);
+  --color-ink-soft: var(--color-ink-soft);
+  --color-teal: var(--color-teal);
+  --color-teal-dark: var(--color-teal-dark);
+  --color-border: var(--color-border);
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+}
+
+body {
+  font-family: var(--font-body), Arial, Helvetica, sans-serif;
+  background-color: var(--color-canvas);
+  background-image:
+    linear-gradient(135deg, var(--color-canvas) 0%, var(--color-canvas-2) 100%),
+    repeating-linear-gradient(0deg, rgba(31, 42, 42, 0.035) 0, rgba(31, 42, 42, 0.035) 1px, transparent 1px, transparent 48px),
+    repeating-linear-gradient(90deg, rgba(31, 42, 42, 0.035) 0, rgba(31, 42, 42, 0.035) 1px, transparent 1px, transparent 48px);
+  min-height: 100%;
+}
+
+.font-display {
+  font-family: var(--font-display), serif;
+}

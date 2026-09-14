@@ -1,0 +1,69 @@
+Identify and provide a validated list of the Top 140-150 independent, relevant, non-overlapping companies/players operating in the Global Food Thin Wafers Market.
+
+The market scope is food thin wafers / wafer biscuits, including manufacturers and brand owners producing cream-filled thin wafers, chocolate-coated thin wafers, plain thin wafers, and specialty thin wafers for retail and foodservice applications.
+
+Use the following market segmentation as the scope for player identification:
+
+By Product Type
+Cream-Filled Thin Wafers
+Chocolate-Coated Thin Wafers
+Plain Thin Wafers
+Specialty Thin Wafers
+
+By Wafer Size
+Ultra-Thin Wafers (<3 mm)
+Standard Thin Wafers (3-5 mm)
+Medium Thin Wafers (5-8 mm)
+
+By Flavor
+Chocolate-Based
+Vanilla & Cream-Based
+Fruit-Based
+Nut-Based
+Other Flavors
+
+By Distribution Channel
+Online: E-commerce Platforms, Company-Owned Online Stores / Direct-to-Consumer (D2C)
+Offline: Supermarkets & Hypermarkets, Convenience Stores, Grocery & Independent Retail Stores, Specialty Food Stores
+Foodservice Channels
+
+Player Selection Criteria
+Include only companies that are directly involved in manufacturing, producing, or owning brands of food thin wafers / wafer biscuits.
+
+Prioritize:
+- Companies manufacturing thin wafer biscuits
+- Companies producing cream-filled wafer biscuits
+- Companies producing chocolate-coated wafer biscuits
+- Companies producing plain or specialty wafer biscuits
+- Companies with branded wafer products
+- Companies with private-label / contract manufacturing capabilities specifically for wafer products
+- Companies with established domestic or international sales of food wafers
+
+Strictly Exclude. Do NOT include:
+- Raw-material suppliers
+- Flour, cocoa, sugar, cream, chocolate or ingredient suppliers
+- Wafer-making machinery/equipment manufacturers
+- Packaging companies
+- Logistics providers
+- Distributors without their own wafer manufacturing
+- Retailers and supermarkets
+- E-commerce marketplaces
+- Foodservice distributors without manufacturing
+- Companies that only sell wafer-making equipment
+- Companies manufacturing semiconductor/electronic wafers
+- Silicon wafer manufacturers
+- Glass/ceramic wafer manufacturers
+- Pharmaceutical wafer manufacturers
+- Ice-cream cone manufacturers unless they also manufacture food thin wafer biscuits
+- Companies whose wafer products are only incidental and not commercially relevant
+- Companies with no verifiable wafer product portfolio
+
+Independence & Non-Overlap Rules. Each company must be an independent player/entity.
+- Do not list the same company more than once.
+- Do not list a parent company and its wholly owned subsidiary separately when they represent the same wafer business.
+- Do not list a brand separately from the company that owns/manufactures it.
+- Do not list multiple subsidiaries of the same corporate group unless they operate as genuinely independent wafer manufacturers in different markets.
+- Do not list distributors that merely distribute another company's wafer brands.
+- Do not list duplicate companies under different spellings or regional names.
+- Do not include companies simply because they appear in a generic biscuit/confectionery database.
+- Validate that each player has a specific and verifiable connection to food thin wafers / wafer biscuits.

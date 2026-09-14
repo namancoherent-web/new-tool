@@ -1,0 +1,15 @@
+Identify a list of at least 100 independent Indian companies manufacturing and selling Ayurvedic and herbal personal care / wellness products (skincare, haircare, herbal supplements, and traditional wellness formulations) in India.
+
+Include companies that:
+- Manufacture and sell their own branded Ayurvedic/herbal skincare, haircare, or wellness products
+- Operate primarily or significantly within India
+- Have an established retail or D2C presence (not just a single local shop with no brand)
+
+Exclude:
+- Pure raw-herb/ingredient suppliers with no finished consumer product
+- International (non-Indian) companies, even if they sell Ayurvedic-labeled products
+- Generic pharmaceutical companies with no Ayurvedic/herbal product line
+- E-commerce marketplaces or retailers that only distribute other brands' products
+- Companies with no verifiable Ayurvedic/herbal product portfolio
+
+Do not list the same company twice under different spellings. Do not list a brand separately from its parent company.

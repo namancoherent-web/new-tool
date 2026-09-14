@@ -1,0 +1,26 @@
+# Secrets -- never commit
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node / Next.js
+web/node_modules/
+web/.next/
+web/.env.local
+
+# Browser automation state (large, machine-specific, regenerated on first run)
+chrome_profile/
+captcha-raptor/
+
+# Generated output / logs -- not source code
+outputs/
+logs/
+cache/
+*.log
+
+# OS cruft
+.DS_Store
+Thumbs.db

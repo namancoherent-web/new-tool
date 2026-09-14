@@ -1,0 +1,24 @@
+Identify and provide a validated list of at least 150 independent, relevant, non-overlapping companies operating in the Global Electric Vehicle (EV) Charging Infrastructure Market.
+
+Market scope: companies that manufacture, install, own/operate, or provide software/network services for EV charging stations and charging infrastructure (AC and DC fast chargers), for public, workplace, fleet, and home charging use cases.
+
+Player Selection Criteria
+Include only companies directly involved in:
+- Manufacturing EV charging hardware (chargers, connectors, charging cabinets)
+- Owning/operating public or fleet charging networks (charge point operators)
+- Providing charging management software/network platforms
+- Providing charging-as-a-service or turnkey charging infrastructure solutions
+
+Strictly Exclude. Do NOT include:
+- Electric vehicle manufacturers themselves (OEMs) unless they also independently manufacture or operate charging infrastructure as a distinct business
+- Battery cell/pack manufacturers
+- General electrical component distributors with no specific EV charging product
+- Utility companies unless they operate a distinct EV charging brand/subsidiary
+- Companies that only make traditional (non-EV) electrical equipment
+- Real estate companies that merely host chargers without owning/operating the charging business
+
+Independence & Non-Overlap Rules
+- Do not list the same company more than once
+- Do not list a subsidiary separately from its parent if they represent the same charging business
+- Do not list a brand separately from the company that owns it
+- Validate that each player has a specific, verifiable connection to EV charging infrastructure

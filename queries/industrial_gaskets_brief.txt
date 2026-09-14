@@ -1,0 +1,17 @@
+Identify and provide a validated list of at least 120 independent companies operating in the Global Industrial Gaskets and Sealing Solutions Market (Europe and North America focus).
+
+Market scope: companies that manufacture industrial gaskets, seals, and sealing solutions for process industries (oil & gas, chemical processing, power generation, water treatment, food & beverage), including metallic, non-metallic, and composite gasket types.
+
+Include:
+- Gasket and seal manufacturers (metallic, rubber, PTFE, composite)
+- Companies with custom/engineered sealing solution capabilities
+- Companies with established industrial B2B distribution
+
+Exclude:
+- Raw material suppliers (rubber compound, PTFE resin, metal stock) with no finished gasket product
+- Distributors/resellers with no manufacturing capability of their own
+- Automotive-only gasket makers with no industrial process-sealing product line
+- Companies whose sealing products are purely consumer/DIY (e.g. plumbing washers for home use)
+- Machinery manufacturers that merely use gaskets as a component in their own equipment
+
+Do not list a subsidiary separately from its parent when they represent the same gasket business. Do not include companies solely because they appear in a generic industrial-supplies directory -- validate a specific, verifiable gasket/sealing product line.
