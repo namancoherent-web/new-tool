@@ -11,8 +11,11 @@ web/node_modules/
 web/.next/
 web/.env.local
 
-# Browser automation state (large, machine-specific, regenerated on first run)
+# Browser automation state (machine-specific, regenerated on first run)
 chrome_profile/
+
+# CAPTCHA-solving extension -- distributed separately (not via GitHub),
+# place it manually at captcha-raptor/ next to this file
 captcha-raptor/
 
 # Generated output / logs -- not source code

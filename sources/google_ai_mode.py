@@ -11,10 +11,10 @@ from sources.common import extract_domain, is_junk_domain
 
 logger = logging.getLogger(__name__)
 
-# google_ai_scraper.py lives at the project root (D:\new tool), one level
-# above market-universe-finder/, since it's a general-purpose Selenium tool
-# the user maintains separately from this pipeline.
-_SCRAPER_ROOT = Path(__file__).resolve().parent.parent.parent
+# google_ai_scraper.py lives at the project root (market-universe-finder/),
+# alongside start.bat, so it ships with the repo instead of depending on a
+# path outside it.
+_SCRAPER_ROOT = Path(__file__).resolve().parent.parent
 if str(_SCRAPER_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRAPER_ROOT))
 
