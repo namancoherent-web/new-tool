@@ -1,68 +1,26 @@
 # Getting started — Market Universe Finder
 
 A step-by-step walkthrough for setting this up on your laptop for the first
-time. This only needs to be done once. After that, use `start.bat` to open
-the tool and `update.bat` whenever told there's a new version.
+time. This only needs to be done once.
 
 ---
 
-## Step 1 — Install four programs
-
-Do these in order. Each one only needs a few clicks.
-
-### Git
-1. Go to https://git-scm.com/downloads and download the installer for
-   Windows.
-2. Run it. Click "Next" through every screen, keeping the default options.
-3. Click "Install", then "Finish".
-
-(You won't use Git directly today — it's what makes `update.bat` work
-later when a new version is released, so install it now to save a step.)
-
-### Python
-1. Go to https://www.python.org/downloads/ and click the yellow "Download
-   Python" button.
-2. Run the installer. **Before clicking anything else, tick the checkbox
-   at the bottom that says "Add python.exe to PATH".** This step is easy
-   to miss and the tool won't work without it.
-3. Click "Install Now" and wait for it to finish.
-
-### Node.js
-1. Go to https://nodejs.org/ and click the button labeled **LTS**
-   (not "Current").
-2. Run the installer. Click "Next" through every screen with the default
-   options, then "Install".
-
-### Chromium
-1. Go to https://www.chromium.org/getting-involved/download-chromium/ and
-   download the Windows build.
-2. Install it normally. This is the browser the tool uses to search Google
-   — during a search you'll see a real browser window open and search
-   Google automatically. That's expected, not an error.
-
----
-
-## Step 2 — Get the tool folder
+## Step 1 — Get the tool folder
 
 You'll receive a ZIP file from whoever set this up for you.
 
 1. Save the ZIP file somewhere you'll remember, e.g. your Desktop.
 2. Right-click it and choose "Extract All...", then "Extract".
-3. Open the extracted folder — you should see files like `start.bat`,
-   `update.bat`, and `REQUIREMENTS.md` inside. This folder is your project
-   folder — keep it where it is (don't move it after this point).
+3. Open the extracted folder — you should see a file called `SETUP.bat`
+   inside. This folder is your project folder — keep it where it is
+   (don't move it after this point).
 
 You'll only get a ZIP this one time. From now on, `update.bat` handles
 getting new versions — see the "Getting updates" section below.
 
-**If you're setting this up yourself instead of receiving a ZIP:**
-download it directly from GitHub at
-https://github.com/namancoherent-web/new-tool — click the green "Code"
-button, then "Download ZIP", and follow steps 1–3 above.
-
 ---
 
-## Step 3 — Add your API key
+## Step 2 — Add your API key
 
 1. Inside the project folder, find the file named `.env.example`.
 2. Make a copy of it, and rename the copy to exactly `.env` (no ".example"
@@ -74,20 +32,31 @@ button, then "Download ZIP", and follow steps 1–3 above.
    give you this key — treat it like a password, don't share it.
 5. Save and close the file.
 
+(If you skip this step, that's fine too — `SETUP.bat` will pause and open
+this file for you automatically the first time you run it.)
+
 ---
 
-## Step 4 — First launch
+## Step 3 — Run SETUP.bat
 
-1. Double-click `start.bat`.
-2. The first time only, this will take a few minutes — you'll see a lot
-   of text scroll by while it installs everything it needs. This is
-   normal. Don't close the window.
-3. When it's done, two new windows will open (leave both running) and your
-   web browser will open automatically to the tool's sign-in page.
-4. Enter your email and click sign in — no password needed.
+1. Double-click `SETUP.bat`.
+2. It will check your laptop for everything it needs (Git, Python,
+   Node.js, Chromium) and silently install anything missing — you don't
+   need to click through any installers yourself. **The first run can
+   take several minutes** — don't close the window, even if it looks like
+   nothing is happening for a while.
+3. If you didn't already add your API key in Step 2, a Notepad window
+   will open asking you to paste it in — do that, save, close Notepad,
+   then run `SETUP.bat` again.
+4. Once everything's installed, it automatically opens the tool — two new
+   windows will appear (leave both running) and your web browser will
+   open to the sign-in page.
+5. Enter your email and click sign in — no password needed.
 
-You're in. Any time after this, just double-click `start.bat` again — it
-will skip the install steps and open in a few seconds.
+You're in. **From now on, just double-click `start.bat`** (not
+`SETUP.bat`) — it skips the install checks and opens in a few seconds.
+`SETUP.bat` only needs to be run once, or again if `start.bat` ever
+complains something is missing.
 
 ---
 
@@ -123,8 +92,10 @@ files inside this folder.
 
 ## If something goes wrong
 
-- **"Python is not installed or not on PATH"** — reinstall Python and make
-  sure you tick "Add python.exe to PATH" this time.
+- **"Windows Package Manager (winget) was not found"** — search "App
+  Installer" in the Microsoft Store, install it, then run `SETUP.bat`
+  again. (This only happens on very old Windows setups — most laptops
+  already have this.)
 - **A CAPTCHA appears in the browser window during a search** — just solve
   it by hand (click the images/checkbox as usual); the search will
   continue automatically afterward.

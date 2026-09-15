@@ -1,46 +1,38 @@
 # Requirements — one-time setup on a new laptop
 
-Install these four things once, in order. Everything else (Python packages,
-Node packages) is installed automatically by `start.bat`.
+1. Extract the project ZIP to a folder you'll keep (e.g. Desktop).
+2. Copy `.env.example` to `.env` and paste in the `DEEPSEEK_API_KEY` value
+   (get this from whoever manages the DeepSeek account).
+3. Double-click `SETUP.bat`.
 
-## 1. Git
-Needed so `update.bat` can pull new versions of the tool.
-Download: https://git-scm.com/downloads
-During install, keep all default options.
+That's it. `SETUP.bat` automatically installs everything the tool needs
+(Git, Python, Node.js, Chromium, and every Python/Node package) and then
+launches the tool. The first run can take several minutes — don't close
+the window.
 
-## 2. Python 3.11 or newer
-Download: https://www.python.org/downloads/
-**Important:** on the first install screen, check the box **"Add python.exe to PATH"**
-before clicking Install.
+After the first run, use `start.bat` to open the tool (fast, skips the
+install checks) and `update.bat` whenever a new version is released.
 
-## 3. Node.js (LTS version)
-Needed to run the web interface.
-Download: https://nodejs.org/ (pick the "LTS" button, not "Current")
-Default install options are fine.
+See `SETUP_FOR_USER.md` for the full walkthrough with screenshots-style
+detail, including troubleshooting.
 
-## 4. Chromium
-Needed for the Google AI Mode company-discovery step (a real, visible
-browser window opens during a search — this is expected).
-Download and install Chromium (not regular Chrome) from:
-https://www.chromium.org/getting-involved/download-chromium/
-It must be installed at the default location:
-`C:\Users\<you>\AppData\Local\Chromium\Application\chrome.exe`
+---
 
-## After installing all four
+## If SETUP.bat can't run (manual fallback)
 
-1. Get the project folder onto the laptop (ask whoever is distributing this
-   tool for the folder, or clone it: `git clone https://github.com/namancoherent-web/new-tool.git`).
-2. Inside the project folder, copy `.env.example` to `.env` and fill in the
-   `DEEPSEEK_API_KEY` value (get this from whoever manages the DeepSeek
-   account — it is a paid key and should not be shared publicly).
-3. Double-click `start.bat`. The first run will take a few minutes while it
-   installs everything else automatically — after that, starting the tool
-   takes a few seconds.
+`SETUP.bat` needs Windows Package Manager (`winget`), which almost every
+modern Windows 10/11 laptop already has. If it reports winget is missing,
+install "App Installer" from the Microsoft Store, then run `SETUP.bat`
+again.
 
-## Getting updates later
+If you'd rather install everything by hand instead:
 
-Whenever a new version is available, double-click `update.bat`. This pulls
-the latest code from GitHub and reinstalls anything that changed. It will
-overwrite any local edits to the tool's own files, so don't hand-edit files
-in this folder — your `.env` file (with your API key) is never touched by
-an update.
+- **Git** — https://git-scm.com/downloads (default options)
+- **Python 3.11+** — https://www.python.org/downloads/ (tick **"Add
+  python.exe to PATH"** on the first install screen)
+- **Node.js (LTS)** — https://nodejs.org/ (pick "LTS", not "Current")
+- **Chromium** — https://www.chromium.org/getting-involved/download-chromium/
+  (must install to the default location)
+
+Once all four are installed, `start.bat` will work directly without
+needing `SETUP.bat` at all.
