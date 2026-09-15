@@ -139,10 +139,15 @@ def build_primary_query(mu: MarketUnderstanding) -> str:
 # queries are fired alongside the broad one specifically to surface the
 # categories a single broad ask tends to under-represent.
 CATEGORY_DIVERSITY_QUERIES = [
-    "distributors and wholesalers (companies that distribute or resell products "
-    "in this market without manufacturing them themselves)",
+    "distributors and wholesalers that SPECIFICALLY distribute or resell products in "
+    "this exact market (not general grocery/food wholesalers with no specific, named "
+    "connection to this market's products) -- they do not manufacture the products "
+    "themselves, but their distribution business is specifically and verifiably tied "
+    "to this market's product category",
     "raw material and ingredient suppliers, and equipment/technology/machinery "
-    "providers that serve this market",
+    "providers whose supplies or equipment are SPECIFICALLY used to produce this "
+    "market's products (not general-purpose suppliers with no named, verifiable "
+    "connection to this specific market)",
 ]
 
 
@@ -184,12 +189,22 @@ def build_retry_query(mu: MarketUnderstanding, attempt: int, already_found: list
     return base + exclusion_note
 
 
-def _mention_to_enriched_candidate(mention, query: str) -> EnrichedCandidate:
+def _mention_to_enriched_candidate(mention, query: str, role_hint: str = "") -> EnrichedCandidate:
     """Build an EnrichedCandidate directly from an AI Mode mention, using its
     own text (country + products) as the classification evidence instead of
     crawling the company's site separately. This is faster but less
     independently verified than a real crawl -- the classifier is trusting
-    AI Mode's own description of the company, not the company's own words."""
+    AI Mode's own description of the company, not the company's own words.
+
+    role_hint: which role-focused query surfaced this mention (e.g.
+    "distributors and wholesalers"), if it came from one of the targeted
+    CATEGORY_DIVERSITY_QUERIES rather than the broad primary query.
+    Confirmed necessary: without this, a company correctly discovered via
+    a distributor-focused query was still classified as Manufacturer by
+    default, since the classifier only ever saw generic name/product
+    evidence with no signal about which role search found it. This is a
+    hint the classifier weighs, not a label it blindly trusts -- the
+    evidence itself still has to support the final category."""
     evidence_text = f"Company: {mention.name}\n"
     if mention.hq_country:
         evidence_text += f"Headquarters: {mention.hq_country}\n"
@@ -199,6 +214,12 @@ def _mention_to_enriched_candidate(mention, query: str) -> EnrichedCandidate:
         evidence_text += (
             "Products/description: none -- no per-company description was available "
             "(this entry came from a name+domain-only list format).\n"
+        )
+    if role_hint:
+        evidence_text += (
+            f"\nDiscovery context: this company was found via a search specifically for "
+            f"{role_hint} in this market -- treat this as a hint toward that role, but "
+            f"still verify against the actual evidence above rather than assuming it.\n"
         )
     evidence_text += "\n(Source: Google AI Mode summary, not an independently crawled website.)"
 
@@ -271,23 +292,28 @@ def discover_via_google_ai_mode(
             # by seen_names when merging results afterwards.
             already_found = [c.name for c in candidates]
 
-            queries: list[str] = []
+            # Each entry is (query_text, role_hint) -- role_hint is empty for
+            # the broad primary/retry queries, and set for the targeted
+            # CATEGORY_DIVERSITY_QUERIES so mentions from those can carry
+            # that context through to classification (see
+            # _mention_to_enriched_candidate's role_hint parameter).
+            query_plan: list[tuple[str, str]] = []
             if attempts_run == 0:
                 # Reserve a couple of round-1 slots specifically for the
                 # categories a broad query tends to miss, instead of every
                 # slot asking the same broad question -- this is the fix
                 # for a real run that came back 100% Manufacturer/Parent
                 # Company/Brand with zero Distributors or Suppliers.
-                queries.append(build_primary_query(mu))
+                query_plan.append((build_primary_query(mu), ""))
                 for role_description in CATEGORY_DIVERSITY_QUERIES:
-                    if len(queries) >= round_size:
+                    if len(query_plan) >= round_size:
                         break
-                    queries.append(build_category_diversity_query(mu, role_description))
-                while len(queries) < round_size:
-                    queries.append(build_retry_query(mu, attempts_run + len(queries) + 1, already_found))
+                    query_plan.append((build_category_diversity_query(mu, role_description), role_description))
+                while len(query_plan) < round_size:
+                    query_plan.append((build_retry_query(mu, attempts_run + len(query_plan) + 1, already_found), ""))
             else:
-                queries = [
-                    build_retry_query(mu, attempts_run + i + 1, already_found)
+                query_plan = [
+                    (build_retry_query(mu, attempts_run + i + 1, already_found), "")
                     for i in range(round_size)
                 ]
 
@@ -297,13 +323,15 @@ def discover_via_google_ai_mode(
                 round_size, attempts_run, MAX_DISCOVERY_ATTEMPTS, len(candidates),
             )
 
-            futures = [
-                executor.submit(_run_one_attempt, q, f"attempt-{attempts_run + i + 1}")
-                for i, q in enumerate(queries)
-            ]
+            labels = [f"attempt-{attempts_run + i + 1}" for i in range(round_size)]
+            futures = {
+                executor.submit(_run_one_attempt, q, label): (q, role_hint)
+                for (q, role_hint), label in zip(query_plan, labels)
+            }
 
             new_this_round = 0
             for future in as_completed(futures):
+                query_for_future, role_hint_for_future = futures[future]
                 try:
                     label, mentions = future.result()
                 except google_ai_mode.ChromiumNotFoundError as e:
@@ -325,7 +353,9 @@ def discover_via_google_ai_mode(
                     if not key or key in seen_names:
                         continue
                     seen_names.add(key)
-                    candidates.append(_mention_to_enriched_candidate(mention, queries[0]))
+                    candidates.append(
+                        _mention_to_enriched_candidate(mention, query_for_future, role_hint_for_future)
+                    )
                     new_this_attempt += 1
                 new_this_round += new_this_attempt
 

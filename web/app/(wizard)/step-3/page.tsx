@@ -226,20 +226,24 @@ export default function Step3Page() {
                 <thead>
                   <tr className="border-b border-border bg-canvas-2 text-left text-ink-soft">
                     <th className="px-4 py-2 font-medium">Company</th>
+                    <th className="px-4 py-2 font-medium">Brand</th>
+                    <th className="px-4 py-2 font-medium">Parent/Independent</th>
                     <th className="px-4 py-2 font-medium">Website</th>
-                    <th className="px-4 py-2 font-medium">HQ</th>
-                    <th className="px-4 py-2 font-medium">Category</th>
-                    <th className="px-4 py-2 font-medium">Confidence</th>
+                    <th className="px-4 py-2 font-medium">Functionality</th>
+                    <th className="px-4 py-2 font-medium">Geography</th>
+                    <th className="px-4 py-2 font-medium">Is Relevant</th>
                   </tr>
                 </thead>
                 <tbody>
                   {run.companies_preview.map((c, i) => (
                     <tr key={i} className="border-b border-border last:border-0">
                       <td className="px-4 py-2 text-ink">{c.company_name}</td>
+                      <td className="px-4 py-2 text-ink-soft">{c.brand_name}</td>
+                      <td className="px-4 py-2 text-ink-soft">{c.parent_or_independent}</td>
                       <td className="px-4 py-2 text-ink-soft">{c.website}</td>
-                      <td className="px-4 py-2 text-ink-soft">{c.hq_country}</td>
-                      <td className="px-4 py-2 text-ink-soft">{c.category}</td>
-                      <td className="px-4 py-2 text-ink-soft">{c.confidence}</td>
+                      <td className="px-4 py-2 text-ink-soft">{c.functionality}</td>
+                      <td className="px-4 py-2 text-ink-soft">{c.geography}</td>
+                      <td className="px-4 py-2 text-ink-soft">{c.is_relevant}</td>
                     </tr>
                   ))}
                 </tbody>
