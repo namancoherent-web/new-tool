@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from config import CONFIG
+from pipeline.ai_mode_verifier import verify_and_classify_via_ai_mode
 from pipeline.category_filter import apply_golden_rule
-from pipeline.classifier import classify_candidates
 from pipeline.crawler import enrich_candidates
 from pipeline.deduplicator import deduplicate
 from pipeline.deepseek_client import DeepSeekClient
@@ -224,8 +224,8 @@ def run_universe_search(
     total_verified = len(verified_ok)
 
     check_cancelled()
-    report("Classifying", f"{total_verified} verified candidates (DeepSeek)")
-    classified = _run_async(classify_candidates(verified_ok, mu))
+    report("Classifying", f"{total_verified} verified candidates (Google AI Mode)")
+    classified = verify_and_classify_via_ai_mode(verified_ok, mu)
 
     no_category_filter = _is_no_filter_prompt(category_prompt)
     if no_category_filter:
