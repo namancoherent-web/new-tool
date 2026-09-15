@@ -360,6 +360,24 @@ def extract_company_mentions(result: dict) -> list[AiModeCompanyMention]:
     return list(seen.values())
 
 
+class ChromiumNotFoundError(RuntimeError):
+    """Raised when the Chromium binary Selenium needs isn't installed at
+    the expected path. Distinct from a normal search() failure (bad
+    response, timeout, etc.) so callers can fail the whole discovery loop
+    fast with a clear message instead of retrying up to 12 times against a
+    browser that will never launch -- confirmed as a real failure mode: a
+    user's machine had no Chromium installed and every single attempt
+    burned through Selenium's own multi-second startup + connection
+    timeout before failing, with only a raw stacktrace buried in the logs
+    to explain why."""
+
+
+def _chromium_missing() -> bool:
+    from pathlib import Path as _Path
+    expected = _Path.home() / "AppData" / "Local" / "Chromium" / "Application" / "chrome.exe"
+    return not expected.is_file()
+
+
 def search(query: str, headless: bool = False, profile_dir: str | None = None) -> list[AiModeCompanyMention]:
     """Query Google AI Mode via the Selenium scraper and return company
     mentions (name + any country/products/website context given) -- none of
@@ -382,6 +400,14 @@ def search(query: str, headless: bool = False, profile_dir: str | None = None) -
     except ImportError as e:
         logger.warning("google_ai_scraper module not available: %s", e)
         return []
+
+    if _chromium_missing():
+        raise ChromiumNotFoundError(
+            "Chromium is not installed at the expected location "
+            "(%AppData%\\Local\\Chromium\\Application\\chrome.exe). "
+            "Run SETUP.bat to install it automatically, or install it "
+            "manually from https://www.chromium.org/getting-involved/download-chromium/"
+        )
 
     scraper = None
     try:
