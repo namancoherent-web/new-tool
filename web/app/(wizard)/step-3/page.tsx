@@ -66,7 +66,7 @@ export default function Step3Page() {
       const { run_id } = await startRun({
         market: state.market,
         geography: state.geography,
-        category_prompt: state.categoryPrompt,
+        category_prompt: "",
         brief,
       });
       setRunId(run_id);
@@ -99,10 +99,6 @@ export default function Step3Page() {
           <p className="mt-1 font-medium text-ink">{state.geography}</p>
         </div>
       </div>
-
-      <p className="mt-6 text-sm text-ink-soft">
-        Category: <span className="font-medium text-ink">{state.categoryPrompt || "All relevant players"}</span>
-      </p>
 
       {brief && (
         <div className="mt-4">

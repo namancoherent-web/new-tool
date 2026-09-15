@@ -34,19 +34,7 @@ export default function Step2Page() {
         Market: <span className="font-medium text-ink">{state.market}</span> · {state.geography}
       </p>
 
-      <div className="mt-6">
-        <label className="mb-2 block text-sm font-medium text-ink">
-          What should the final list include?
-        </label>
-        <input
-          value={state.categoryPrompt}
-          onChange={(e) => update({ categoryPrompt: e.target.value })}
-          placeholder="e.g. Parent Companies, Manufacturers — leave blank for all relevant players"
-          className="w-full rounded-xl border border-border bg-white px-4 py-3 text-ink outline-none focus:border-teal"
-        />
-      </div>
-
-      <p className="mt-8 text-ink">
+      <p className="mt-6 text-ink">
         How should we define the scope of this market?
       </p>
       <div className="mt-3 space-y-2">
@@ -111,7 +99,7 @@ export default function Step2Page() {
           <textarea
             value={state.freeformBrief}
             onChange={(e) => update({ freeformBrief: e.target.value })}
-            placeholder="Describe the market scope in your own words: what to include, what to exclude, segmentation, independence rules..."
+            placeholder="Describe the market scope in your own words: what roles to include (e.g. Manufacturers, Suppliers, Parent Companies), what to exclude, segmentation, independence rules..."
             rows={12}
             className="w-full rounded-xl border border-border bg-white px-4 py-3 text-ink outline-none focus:border-teal"
           />
