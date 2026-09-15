@@ -19,7 +19,14 @@ logger = logging.getLogger(__name__)
 # test run, so no login/extension state needs to be shared or cloned).
 # Bounded to avoid hammering the machine/network with too many simultaneous
 # real browser sessions -- this is a real resource cost, not a free knob.
-PARALLEL_ATTEMPTS_PER_ROUND = 3
+# Wall-clock cost is roughly (attempts / PARALLEL_ATTEMPTS_PER_ROUND) x
+# ~60-150s per round (each attempt waits for AI Mode's own response to
+# finish generating, which dominates the time, not CPU work) -- so with
+# MAX_DISCOVERY_ATTEMPTS=12, 3-per-round meant 4 sequential rounds
+# (~6-10 min just for discovery). 6-per-round halves that to 2 rounds,
+# trading more simultaneous Chrome windows (heavier on RAM/CPU briefly)
+# for meaningfully faster total run time.
+PARALLEL_ATTEMPTS_PER_ROUND = 6
 
 # Every run targets at least this many companies internally, regardless of
 # what count (if any) the user's own prompt/brief asks for -- confirmed

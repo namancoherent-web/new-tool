@@ -58,6 +58,30 @@ def _resolve_driver_path() -> str:
     return _cached_driver_path
 
 
+def _mark_profile_exited_cleanly(profile_dir: str) -> None:
+    """Chrome decides whether to show the blocking "Restore pages?" popup
+    based on exit_type/exit_code in <profile_dir>/Default/Preferences. If a
+    previous run of this exact profile was killed abruptly, that file says
+    the browser crashed, and every subsequent launch shows the popup until
+    a real clean shutdown happens -- which never occurs for throwaway
+    per-attempt profiles that get deleted right after use. Patching these
+    two fields before launch is more reliable than any command-line flag
+    for suppressing this specific popup. Best-effort: a fresh profile has
+    no Preferences file yet, and any read/parse error here should never
+    block a browser launch over a cosmetic startup dialog."""
+    prefs_path = Path(profile_dir) / "Default" / "Preferences"
+    if not prefs_path.is_file():
+        return
+    try:
+        data = json.loads(prefs_path.read_text(encoding="utf-8"))
+        profile = data.setdefault("profile", {})
+        profile["exit_type"] = "Normal"
+        profile["exited_cleanly"] = True
+        prefs_path.write_text(json.dumps(data), encoding="utf-8")
+    except (OSError, ValueError):
+        pass
+
+
 class GoogleAIModeScraper:
     """Direct Google AI Mode scraper using the AI Mode URL"""
 
@@ -107,6 +131,19 @@ class GoogleAIModeScraper:
         # Persistent profile -- lets manually-installed extensions (e.g. a
         # CAPTCHA solver) and any logged-in Google session survive between runs.
         chrome_options.add_argument(f"--user-data-dir={self.profile_dir}")
+
+        # If a previous run was killed abruptly (crashed, force-stopped) the
+        # profile's own Preferences file records exit_type != "Normal", which
+        # makes Chrome show a blocking "Restore pages?" popup on next launch
+        # -- confirmed as a real failure mode: that popup covers the page and
+        # an AI Mode query submitted while it's up can return "Something went
+        # wrong and an AI response wasn't generated." Patch the flag directly
+        # before every launch so this can never trigger, regardless of how
+        # the previous session for this exact profile ended.
+        _mark_profile_exited_cleanly(self.profile_dir)
+        chrome_options.add_argument("--no-first-run")
+        chrome_options.add_argument("--no-default-browser-check")
+        chrome_options.add_argument("--hide-crash-restore-bubble")
 
         # Load the captcha-raptor unpacked extension directly -- avoids
         # relying on it having been manually installed into the profile via
