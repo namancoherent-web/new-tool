@@ -71,6 +71,10 @@ if errorlevel 1 (
 git clean -fd -e .env -e .env.local -e web/.env.local -e chrome_profile -e outputs -e logs -e cache >nul 2>nul
 
 echo.
+echo ============================================
+for /f "delims=" %%C in ('git log -1 --format^="%%h %%s"') do echo  Now on: %%C
+echo ============================================
+echo.
 echo [Update] Refreshing installed packages to match the new version...
 if exist ".venv\Scripts\python.exe" (
     ".venv\Scripts\python.exe" -m pip install --quiet -r requirements.txt
