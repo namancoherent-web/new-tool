@@ -20,8 +20,13 @@ logger = logging.getLogger(__name__)
 # query can't reliably hold hundreds of companies and return clean
 # structured JSON for every one, so candidates are split into batches and
 # verified in parallel, mirroring the discovery step's own approach.
+# PARALLEL_VERIFY_BATCHES shares the same low-spec-laptop constraint as
+# discovery's PARALLEL_ATTEMPTS_PER_ROUND -- each batch is a real Chromium
+# window, so this is capped by the same .env setting rather than a
+# separate hardcoded number, to avoid two independent concurrency knobs
+# that both need tuning for the same underlying hardware limit.
 VERIFY_BATCH_SIZE = 40
-PARALLEL_VERIFY_BATCHES = 6
+PARALLEL_VERIFY_BATCHES = CONFIG.google_ai_mode_max_parallel_browsers
 
 ACCURACY_PREFIX = (
     "You are verifying a list of companies that were already discovered as candidates "

@@ -159,6 +159,21 @@ class GoogleAIModeScraper:
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--window-size=1920,1080")
         chrome_options.add_argument("--start-maximized")
+
+        # Resource-saving flags for low-spec machines (this tool is
+        # distributed to laptops with as little as 8GB RAM and older CPUs,
+        # running several of these windows at once) -- none of these affect
+        # page functionality or the captcha-raptor extension, which still
+        # needs images to load to analyze CAPTCHA grids, so image loading
+        # itself is deliberately left untouched.
+        chrome_options.add_argument("--disable-background-timer-throttling")
+        chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+        chrome_options.add_argument("--disable-renderer-backgrounding")
+        chrome_options.add_argument("--js-flags=--max-old-space-size=512")
+        chrome_options.add_argument("--disable-background-networking")
+        chrome_options.add_argument("--metrics-recording-only")
+        chrome_options.add_argument("--disable-sync")
+        chrome_options.add_argument("--mute-audio")
         
         # Better user agent
         chrome_options.add_argument(
