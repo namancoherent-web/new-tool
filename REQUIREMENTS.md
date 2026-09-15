@@ -33,11 +33,7 @@ It must be installed at the default location:
 2. Inside the project folder, copy `.env.example` to `.env` and fill in the
    `DEEPSEEK_API_KEY` value (get this from whoever manages the DeepSeek
    account — it is a paid key and should not be shared publicly).
-3. Ask whoever set this up for the `captcha-raptor` folder (it's shared
-   separately, not through GitHub) and place it directly inside the project
-   folder, next to `start.bat`. Without it, the tool still works, but may
-   occasionally hit a CAPTCHA it can't solve automatically during discovery.
-4. Double-click `start.bat`. The first run will take a few minutes while it
+3. Double-click `start.bat`. The first run will take a few minutes while it
    installs everything else automatically — after that, starting the tool
    takes a few seconds.
 
