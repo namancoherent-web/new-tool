@@ -88,12 +88,22 @@ def build_primary_query(mu: MarketUnderstanding) -> str:
     CLI's --brief), that brief is sent to AI Mode verbatim, since testing
     confirmed a single well-detailed prompt like that reliably returns
     100+ structured company mentions in one pass -- far more effective than
-    splitting into many shorter generic queries. The requested count inside
-    the user's own brief text (e.g. "Top 140-150") is left as-is; the
-    pipeline's own MIN_TARGET_COMPANIES floor is enforced separately via
-    retries, not by rewriting the user's prompt."""
+    splitting into many shorter generic queries.
+
+    The MIN_TARGET_COMPANIES floor is always appended regardless of
+    whatever count (if any) the user's own brief text asks for -- e.g. a
+    brief asking for "Top 40-50" still gets pushed toward 200+, since a
+    brief with no explicit large number in it was confirmed to produce a
+    response that started with just one company in a table, and even a
+    brief with its own (smaller) number shouldn't cap what the pipeline
+    aims for."""
     if mu.brief.strip():
-        return ACCURACY_PREFIX + mu.brief.strip() + ACCURACY_SUFFIX
+        brief_text = mu.brief.strip() + (
+            f"\n\nRegardless of any specific count mentioned above, provide as many "
+            f"real, verifiable companies as you can find -- aim for at least "
+            f"{MIN_TARGET_COMPANIES}, not just a handful of the most obvious/famous names."
+        )
+        return ACCURACY_PREFIX + brief_text + ACCURACY_SUFFIX
 
     hint = _category_hint(mu.category_prompt)
     base = (
