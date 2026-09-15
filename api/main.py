@@ -22,6 +22,15 @@ from pipeline.universe_builder import RunResult, run_universe_search
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+# Bump this string with every meaningful pipeline/UI change so it's trivial
+# to confirm from the running app (no git command needed) whether a given
+# laptop is actually on the latest code after running update.bat -- printed
+# loudly at startup and exposed via /api/health.
+BUILD_VERSION = "2026-09-15-01-chromedriver-cache-and-200-floor"
+logger.info("=" * 60)
+logger.info("Market Universe Finder API starting -- BUILD_VERSION: %s", BUILD_VERSION)
+logger.info("=" * 60)
+
 app = FastAPI(title="Market Universe Finder API")
 
 # Local-only tool (per UNDERSTANDING.txt §7): the Next.js dev server and this
@@ -238,4 +247,4 @@ def download_run_file(run_id: str, fmt: str, request: Request) -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True}
+    return {"ok": True, "build_version": BUILD_VERSION}
