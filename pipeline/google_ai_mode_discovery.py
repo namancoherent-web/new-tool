@@ -215,7 +215,20 @@ def discover_via_google_ai_mode(mu: MarketUnderstanding) -> list[EnrichedCandida
 
             new_this_round = 0
             for future in as_completed(futures):
-                label, mentions = future.result()
+                try:
+                    label, mentions = future.result()
+                except google_ai_mode.ChromiumNotFoundError as e:
+                    # Not a normal per-attempt failure (bad response,
+                    # timeout) -- the browser can never launch, so every
+                    # remaining attempt in every remaining round would fail
+                    # identically. Stop the whole discovery loop immediately
+                    # instead of burning through all 12 attempts uselessly
+                    # (confirmed as a real failure mode on a user machine
+                    # with no Chromium installed).
+                    logger.error("Google AI Mode discovery cannot run: %s", e)
+                    for f in futures:
+                        f.cancel()
+                    raise
                 logger.info("Google AI Mode %s returned %d company mentions", label, len(mentions))
                 new_this_attempt = 0
                 for mention in mentions:
