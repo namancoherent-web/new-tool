@@ -16,6 +16,9 @@ Do these in order. Each one only needs a few clicks.
 2. Run it. Click "Next" through every screen, keeping the default options.
 3. Click "Install", then "Finish".
 
+(You won't use Git directly today — it's what makes `update.bat` work
+later when a new version is released, so install it now to save a step.)
+
 ### Python
 1. Go to https://www.python.org/downloads/ and click the yellow "Download
    Python" button.
@@ -41,18 +44,21 @@ Do these in order. Each one only needs a few clicks.
 
 ## Step 2 — Get the tool folder
 
-You'll receive the project folder from whoever set this up for you (either
-as a shared folder, or you'll run one command to download it — they'll
-tell you which). If you're downloading it yourself:
+You'll receive a ZIP file from whoever set this up for you.
 
-1. Right-click on your Desktop (or wherever you want it) and choose
-   "Open in Terminal" (or open the Start menu, type `cmd`, and press Enter).
-2. Type this and press Enter:
-   ```
-   git clone https://github.com/namancoherent-web/new-tool.git
-   ```
-3. A new folder will appear. Open it — you should see files like
-   `start.bat`, `update.bat`, and `REQUIREMENTS.md` inside.
+1. Save the ZIP file somewhere you'll remember, e.g. your Desktop.
+2. Right-click it and choose "Extract All...", then "Extract".
+3. Open the extracted folder — you should see files like `start.bat`,
+   `update.bat`, and `REQUIREMENTS.md` inside. This folder is your project
+   folder — keep it where it is (don't move it after this point).
+
+You'll only get a ZIP this one time. From now on, `update.bat` handles
+getting new versions — see the "Getting updates" section below.
+
+**If you're setting this up yourself instead of receiving a ZIP:**
+download it directly from GitHub at
+https://github.com/namancoherent-web/new-tool — click the green "Code"
+button, then "Download ZIP", and follow steps 1–3 above.
 
 ---
 
