@@ -49,6 +49,13 @@ Return strict JSON:
 {
   "is_relevant": true/false,
   "company_name": "canonical company name",
+  "brand_name": "the specific product brand name if the evidence names one distinct from the \
+company's own name (e.g. company 'Josef Manner & Comp. AG' owns brand 'Manner') -- otherwise \
+repeat the company name",
+  "parent_or_independent": "one of: Independent / Subsidiary of <Parent Company Name> / Parent \
+Company -- state which, using the exact parent company name if the evidence names one (e.g. \
+'Subsidiary of Textron'); use 'Independent' if the evidence gives no indication of a parent, and \
+never guess a parent that isn't stated",
   "category": "single best-fit role, e.g. Parent Company / Manufacturer / Distributor / Supplier / \
 Technology Provider / OEM / Retailer / Brand / Investor / Raw Material Supplier / Service Provider / Other",
   "subcategory": "market-specific short label for what it does",
