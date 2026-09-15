@@ -15,6 +15,7 @@ Pipeline:
     - pretty-print them as ASCII tables using tabulate in the terminal
 """
 
+import threading
 import time
 import random
 import json
@@ -34,6 +35,27 @@ from selenium.webdriver.chrome.service import Service
 
 from bs4 import BeautifulSoup
 from tabulate import tabulate
+
+# ChromeDriverManager().install() does a filesystem + version-check pass
+# (sometimes a network round-trip) every time it's called. With multiple
+# discovery attempts launching browsers concurrently, calling this fresh
+# per-instance meant every single attempt re-did that check, and
+# webdriver-manager's own cache-file locking could serialize otherwise-
+# parallel browser launches on it -- confirmed as a real slowdown: attempts
+# that should run side-by-side were visibly opening one at a time. Resolved
+# once per process and reused for every scraper instance after that.
+_driver_path_lock = threading.Lock()
+_cached_driver_path: str | None = None
+
+
+def _resolve_driver_path() -> str:
+    global _cached_driver_path
+    if _cached_driver_path is not None:
+        return _cached_driver_path
+    with _driver_path_lock:
+        if _cached_driver_path is None:
+            _cached_driver_path = ChromeDriverManager().install()
+    return _cached_driver_path
 
 
 class GoogleAIModeScraper:
@@ -123,7 +145,7 @@ class GoogleAIModeScraper:
         )
 
         try:
-            service = Service(ChromeDriverManager().install())
+            service = Service(_resolve_driver_path())
             # Add service args for better headless performance
             service.log_path = "NUL" if self.headless else None
             
