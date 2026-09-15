@@ -41,6 +41,15 @@ class Config:
     # avoiding DDG's anti-bot blocking issues altogether.
     google_ai_mode_only: bool = field(default_factory=lambda: _bool("GOOGLE_AI_MODE_ONLY", False))
     google_ai_mode_max_queries: int = field(default_factory=lambda: _int("GOOGLE_AI_MODE_MAX_QUERIES", 3))
+    # How many real Chromium windows are allowed open at once for discovery
+    # and verification. Each one is a full browser process -- on a low-spec
+    # laptop (e.g. an older i3 with 8GB RAM, the actual hardware this tool
+    # is distributed on) too many at once makes the whole machine unusable
+    # while a run is in progress, not just slow. Defaults to 2 as a safe
+    # baseline; raise it in .env on a faster machine for quicker runs.
+    google_ai_mode_max_parallel_browsers: int = field(
+        default_factory=lambda: _int("GOOGLE_AI_MODE_MAX_PARALLEL_BROWSERS", 2)
+    )
 
     max_concurrent_crawls: int = field(default_factory=lambda: _int("MAX_CONCURRENT_CRAWLS", 10))
     max_concurrent_classifications: int = field(default_factory=lambda: _int("MAX_CONCURRENT_CLASSIFICATIONS", 8))
