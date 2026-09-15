@@ -67,10 +67,13 @@ export interface ProgressEntry {
 
 export interface CompanyPreview {
   company_name: string;
+  brand_name: string;
+  parent_or_independent: string;
   website: string;
-  hq_country: string;
+  functionality: string;
+  geography: string;
+  is_relevant: string;
   category: string;
-  confidence: number;
 }
 
 export interface RunSummary {

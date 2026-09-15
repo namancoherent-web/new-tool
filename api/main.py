@@ -186,10 +186,13 @@ def _run_summary(state: RunState) -> dict:
         summary["companies_preview"] = [
             {
                 "company_name": c.company_name,
+                "brand_name": c.brand_name or c.company_name,
+                "parent_or_independent": c.parent_or_independent or "Independent",
                 "website": c.website,
-                "hq_country": c.hq_country,
+                "functionality": c.subcategory or c.category,
+                "geography": c.hq_country,
+                "is_relevant": "yes" if c.is_relevant else "no",
                 "category": c.category,
-                "confidence": c.confidence,
             }
             for c in r.companies[:200]
         ]
