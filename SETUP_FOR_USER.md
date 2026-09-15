@@ -70,17 +70,7 @@ tell you which). If you're downloading it yourself:
 
 ---
 
-## Step 4 — Add the CAPTCHA-solving folder (if given one)
-
-If you were given a folder called `captcha-raptor`, place it directly
-inside the project folder, at the same level as `start.bat`. If you
-weren't given one, skip this — the tool still works without it, it will
-just occasionally need you to solve a CAPTCHA by hand in the browser
-window that opens.
-
----
-
-## Step 5 — First launch
+## Step 4 — First launch
 
 1. Double-click `start.bat`.
 2. The first time only, this will take a few minutes — you'll see a lot
