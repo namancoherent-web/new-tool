@@ -55,6 +55,10 @@ export function startRun(payload: StartRunPayload): Promise<{ run_id: string }> 
   return request("/api/runs", { method: "POST", body: JSON.stringify(payload) });
 }
 
+export function stopRun(runId: string): Promise<{ ok: boolean }> {
+  return request(`/api/runs/${runId}/stop`, { method: "POST" });
+}
+
 export interface ProgressEntry {
   stage: string;
   detail: string;
@@ -74,7 +78,7 @@ export interface RunSummary {
   market: string;
   geography: string;
   category_prompt: string;
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "cancelled";
   started_at: number;
   progress_log: ProgressEntry[];
   duration_seconds?: number;
