@@ -107,6 +107,19 @@ def build_primary_query(mu: MarketUnderstanding) -> str:
         )
         return ACCURACY_PREFIX + brief_text + ACCURACY_SUFFIX
 
+    # No brief at all -- falls back to a generic auto-generated query
+    # instead of whatever the user actually described. This should only
+    # ever happen for the bare CLI path with no --brief given; if it
+    # happens for a web-UI-driven run, the user's Step 2 description was
+    # lost somewhere upstream (frontend state reset, empty textarea, etc.)
+    # and they're silently getting a completely different query than what
+    # they wrote -- log loudly so this is traceable instead of invisible.
+    logger.warning(
+        "No brief provided for %r (%s) -- falling back to a generic auto-generated query "
+        "instead of a user-described one. If this run came from the web UI, the user's "
+        "Step 2 description did not reach the backend.",
+        mu.market_name, mu.geography,
+    )
     hint = _category_hint(mu.category_prompt)
     base = (
         f"Identify and provide a validated list of at least {MIN_TARGET_COMPANIES} independent, "

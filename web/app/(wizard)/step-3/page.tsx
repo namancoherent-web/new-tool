@@ -62,6 +62,13 @@ export default function Step3Page() {
 
   async function handleStart() {
     setError(null);
+    if (!brief.trim()) {
+      setError(
+        "Your market scope description is empty, so nothing would be sent to Google AI Mode " +
+          "except a generic fallback query. Go back to Step 2 and fill in your description before starting."
+      );
+      return;
+    }
     setStarting(true);
     try {
       const { run_id } = await startRun({
