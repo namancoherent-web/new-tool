@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,12 +54,23 @@ def _is_no_filter_prompt(category_prompt: str) -> bool:
     return re.sub(r"[^a-z0-9 ]", "", category_prompt.lower()).strip() in _NO_FILTER_PHRASES
 
 
+class RunCancelled(Exception):
+    """Raised to unwind out of run_universe_search when the caller (the API
+    layer's Stop button) sets the run's cancel_event. Not an error -- the
+    caller catches this specifically and marks the run "cancelled" rather
+    than "error". There is no way to forcibly kill a Python thread that's
+    mid-Selenium-session or mid-HTTP-call, so cancellation is cooperative:
+    checked between pipeline stages (and between AI Mode discovery rounds,
+    the longest-running stage) rather than instant."""
+
+
 def run_universe_search(
     market_name: str,
     geography: str,
     category_prompt: str,
     brief: str = "",
     progress_cb=None,
+    cancel_event: threading.Event | None = None,
 ) -> RunResult:
     """Full Universe Mode pipeline: understand -> discover (with widen loop) ->
     enrich -> verify -> classify -> strict category filter -> dedup -> export.
@@ -77,7 +89,12 @@ def run_universe_search(
     of being lost when only a short market name is given.
 
     progress_cb, if given, is called with (stage_name: str, detail: str) at
-    each stage transition -- used by CLI/Streamlit/API to show progress."""
+    each stage transition -- used by CLI/Streamlit/API to show progress.
+
+    cancel_event, if given, is checked between pipeline stages -- when set,
+    RunCancelled is raised and the run stops at the next checkpoint (not
+    instantly, since there's no way to safely interrupt a live browser
+    session or in-flight HTTP call mid-stage)."""
     start = time.time()
 
     def report(stage: str, detail: str = "") -> None:
@@ -85,12 +102,18 @@ def run_universe_search(
         if progress_cb:
             progress_cb(stage, detail)
 
+    def check_cancelled() -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            report("Cancelled", "Run stopped by user")
+            raise RunCancelled()
+
     report("Understanding market", f"{market_name} / {geography} / {category_prompt}")
     ds_client = DeepSeekClient()
     try:
         mu = understand_market(ds_client, market_name, geography, category_prompt, brief)
     finally:
         ds_client.close()
+    check_cancelled()
 
     ai_mode_only = CONFIG.google_ai_mode_enabled and CONFIG.google_ai_mode_only
 
@@ -113,7 +136,8 @@ def run_universe_search(
         # entirely -- slower and lower-volume per run than the multi-source
         # path, but avoids DDG's anti-bot blocking issues altogether.
         report("Querying Google AI Mode", "sole discovery source for this run (opens a visible browser window)")
-        candidates = discover_via_google_ai_mode(mu)
+        candidates = discover_via_google_ai_mode(mu, cancel_event=cancel_event)
+        check_cancelled()
         report("Google AI Mode discovery complete", f"{len(candidates)} companies found")
     else:
         report("Searching sources", f"{len(mu.search_queries)} initial queries")
@@ -190,6 +214,7 @@ def run_universe_search(
         report("Crawling websites", f"{len(candidates)} candidates")
         enriched = _run_async(enrich_candidates(candidates))
 
+    check_cancelled()
     report("Verifying", f"{len(enriched)} enriched candidates")
     if ai_mode_only:
         verified = verify_ai_mode_candidates(enriched)
@@ -198,6 +223,7 @@ def run_universe_search(
     verified_ok = [v for v in verified if not v.rejected]
     total_verified = len(verified_ok)
 
+    check_cancelled()
     report("Classifying", f"{total_verified} verified candidates (DeepSeek)")
     classified = _run_async(classify_candidates(verified_ok, mu))
 

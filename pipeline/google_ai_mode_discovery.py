@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -177,7 +178,9 @@ def _run_one_attempt(query: str, attempt_label: str) -> tuple[str, list]:
         shutil.rmtree(profile_dir, ignore_errors=True)
 
 
-def discover_via_google_ai_mode(mu: MarketUnderstanding) -> list[EnrichedCandidate]:
+def discover_via_google_ai_mode(
+    mu: MarketUnderstanding, cancel_event: threading.Event | None = None
+) -> list[EnrichedCandidate]:
     """Send the user's brief (or a generated equivalent) to Google AI Mode,
     running attempts in rounds of PARALLEL_ATTEMPTS_PER_ROUND concurrent
     browser sessions (each in its own throwaway profile) up to
@@ -189,7 +192,12 @@ def discover_via_google_ai_mode(mu: MarketUnderstanding) -> list[EnrichedCandida
     directly buys a better chance of hitting the target. Every mention
     returned is still just a name + context -- it flows into the same
     verify -> classify -> Golden Rule filter pipeline as every other
-    discovery source; AI Mode is never trusted as a final answer."""
+    discovery source; AI Mode is never trusted as a final answer.
+
+    cancel_event, if given, is checked between rounds (not mid-round, since
+    there's no way to safely abort a live browser session already in
+    flight) -- if set, whatever candidates have been found so far are
+    returned immediately instead of starting another round."""
     if not CONFIG.google_ai_mode_enabled:
         return []
 
@@ -199,7 +207,11 @@ def discover_via_google_ai_mode(mu: MarketUnderstanding) -> list[EnrichedCandida
     consecutive_zero_rounds = 0
 
     with ThreadPoolExecutor(max_workers=PARALLEL_ATTEMPTS_PER_ROUND) as executor:
-        while attempts_run < MAX_DISCOVERY_ATTEMPTS and len(candidates) < MIN_TARGET_COMPANIES:
+        while (
+            attempts_run < MAX_DISCOVERY_ATTEMPTS
+            and len(candidates) < MIN_TARGET_COMPANIES
+            and not (cancel_event is not None and cancel_event.is_set())
+        ):
             round_size = min(PARALLEL_ATTEMPTS_PER_ROUND, MAX_DISCOVERY_ATTEMPTS - attempts_run)
             # Every attempt in a round is built from the SAME already_found
             # snapshot (since they run concurrently, none can see another's
@@ -258,6 +270,10 @@ def discover_via_google_ai_mode(mu: MarketUnderstanding) -> list[EnrichedCandida
 
             if len(candidates) >= MIN_TARGET_COMPANIES:
                 logger.info("Reached target of %d+ companies after %d attempt(s)", MIN_TARGET_COMPANIES, attempts_run)
+                break
+
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("Discovery cancelled by user after %d attempt(s), %d companies found so far", attempts_run, len(candidates))
                 break
 
             # A near-empty round (all attempts in it combined added almost

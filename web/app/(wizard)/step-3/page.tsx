@@ -6,7 +6,7 @@ import { Card } from "@/components/Card";
 import { StepPills } from "@/components/StepPills";
 import { PrimaryButton, SecondaryButton } from "@/components/Buttons";
 import { useWizardState, buildBrief } from "@/lib/useWizardState";
-import { startRun, getRun, downloadUrl, type RunSummary, ApiError } from "@/lib/api";
+import { startRun, stopRun, getRun, downloadUrl, type RunSummary, ApiError } from "@/lib/api";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -19,6 +19,7 @@ export default function Step3Page() {
   const [run, setRun] = useState<RunSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -78,11 +79,24 @@ export default function Step3Page() {
     }
   }
 
+  async function handleStop() {
+    if (!runId) return;
+    setStopping(true);
+    try {
+      await stopRun(runId);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not stop the run.");
+    } finally {
+      setStopping(false);
+    }
+  }
+
   if (!loaded) return null;
 
   const isRunning = run?.status === "running" || (runId && !run);
   const isDone = run?.status === "done";
   const isError = run?.status === "error";
+  const isCancelled = run?.status === "cancelled";
 
   return (
     <Card className="p-10">
@@ -132,7 +146,12 @@ export default function Step3Page() {
 
       {isRunning && (
         <div className="mt-8">
-          <h2 className="font-display text-xl font-semibold text-ink">Running...</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="font-display text-xl font-semibold text-ink">Running...</h2>
+            <SecondaryButton type="button" onClick={handleStop} disabled={stopping}>
+              {stopping ? "Stopping..." : "Stop"}
+            </SecondaryButton>
+          </div>
           <p className="mt-1 text-sm text-ink-soft">
             This can take a while for a full discovery pass. Do not close this tab.
           </p>
@@ -153,6 +172,12 @@ export default function Step3Page() {
       {isError && (
         <div className="mt-8 rounded-xl border border-red-200 bg-red-50 p-4 text-red-800">
           Run failed: {run?.error}
+        </div>
+      )}
+
+      {isCancelled && (
+        <div className="mt-8 rounded-xl border border-border bg-canvas-2 p-4 text-ink-soft">
+          Run stopped. Go back and click Start run to try again.
         </div>
       )}
 

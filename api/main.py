@@ -17,7 +17,7 @@ from pydantic import BaseModel, EmailStr
 from starlette.middleware.sessions import SessionMiddleware
 
 from config import CONFIG
-from pipeline.universe_builder import RunResult, run_universe_search
+from pipeline.universe_builder import RunCancelled, RunResult, run_universe_search
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -102,11 +102,12 @@ class RunState:
     geography: str
     category_prompt: str
     brief: str
-    status: Literal["running", "done", "error"] = "running"
+    status: Literal["running", "done", "error", "cancelled"] = "running"
     progress_log: list[dict] = field(default_factory=list)
     result: RunResult | None = None
     error: str | None = None
     started_at: float = field(default_factory=time.time)
+    cancel_event: threading.Event = field(default_factory=threading.Event)
 
 
 # In-memory job store -- fine for a single-laptop local tool (see
@@ -131,10 +132,14 @@ def _execute_run(state: RunState) -> None:
         result = run_universe_search(
             state.market, state.geography, state.category_prompt,
             brief=state.brief, progress_cb=progress_cb,
+            cancel_event=state.cancel_event,
         )
         with _runs_lock:
             state.result = result
             state.status = "done"
+    except RunCancelled:
+        with _runs_lock:
+            state.status = "cancelled"
     except Exception as e:
         logger.exception("Run %s failed", state.run_id)
         with _runs_lock:
@@ -192,6 +197,25 @@ def _run_summary(state: RunState) -> dict:
     elif state.status == "error":
         summary["error"] = state.error
     return summary
+
+
+@app.post("/api/runs/{run_id}/stop")
+def stop_run(run_id: str, request: Request) -> dict:
+    email = _require_email(request)
+    with _runs_lock:
+        state = RUNS.get(run_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if state.owner_email != email and email not in CONFIG.admin_emails:
+        raise HTTPException(status_code=403, detail="Not your run")
+    if state.status != "running":
+        raise HTTPException(status_code=409, detail="Run is not currently running")
+    # Cooperative cancellation only -- there's no way to forcibly kill a
+    # thread mid-Selenium-session or mid-HTTP-call, so this signals the
+    # pipeline to stop at its next checkpoint (between discovery rounds or
+    # pipeline stages) rather than instantly.
+    state.cancel_event.set()
+    return {"ok": True}
 
 
 @app.get("/api/runs/{run_id}")
