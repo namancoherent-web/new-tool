@@ -86,23 +86,17 @@ def build_primary_query(mu: MarketUnderstanding) -> str:
     """Build the single AI Mode query for this run. If the user supplied a
     detailed brief (inclusion/exclusion rules, segmentation, independence
     rules -- e.g. via the web UI's "Describe it in your own words" or the
-    CLI's --brief), that brief is sent to AI Mode verbatim, since testing
-    confirmed a single well-detailed prompt like that reliably returns
-    100+ structured company mentions in one pass -- far more effective than
-    splitting into many shorter generic queries.
-
-    The MIN_TARGET_COMPANIES floor is always appended regardless of
-    whatever count (if any) the user's own brief text asks for -- e.g. a
-    brief asking for "Top 40-50" still gets pushed toward 200+, since a
-    brief with no explicit large number in it was confirmed to produce a
-    response that started with just one company in a table, and even a
-    brief with its own (smaller) number shouldn't cap what the pipeline
-    aims for."""
+    CLI's --brief), the brief's own wording is never rewritten or altered --
+    the user's exact text (e.g. their own "150" or "200+ companies") is
+    preserved verbatim. The MIN_TARGET_COMPANIES floor is still appended
+    AFTER it as a safety net (users are expected to state their own count,
+    but a brief that forgets to should still push for real breadth rather
+    than default to a short illustrative list)."""
     if mu.brief.strip():
         brief_text = mu.brief.strip() + (
-            f"\n\nRegardless of any specific count mentioned above, provide as many "
-            f"real, verifiable companies as you can find -- aim for at least "
-            f"{MIN_TARGET_COMPANIES}, not just a handful of the most obvious/famous names."
+            f"\n\nIf the above does not already specify a target number of companies, "
+            f"aim for at least {MIN_TARGET_COMPANIES} real, verifiable companies rather "
+            f"than a short illustrative list."
         )
         return ACCURACY_PREFIX + brief_text + ACCURACY_SUFFIX
 
