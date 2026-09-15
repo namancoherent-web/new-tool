@@ -130,6 +130,44 @@ def build_primary_query(mu: MarketUnderstanding) -> str:
     return ACCURACY_PREFIX + base + ACCURACY_SUFFIX
 
 
+# A single broad query reliably returns manufacturers/brand owners (the
+# most documented, most-searched company type) but rarely surfaces pure
+# distributors, suppliers, or technology/equipment providers even when the
+# brief explicitly asks for "all company types" -- confirmed via a real run
+# that returned 140 companies, all labeled Manufacturer/Parent Company/
+# Brand, none Distributor/Supplier/Technology Provider. These targeted
+# queries are fired alongside the broad one specifically to surface the
+# categories a single broad ask tends to under-represent.
+CATEGORY_DIVERSITY_QUERIES = [
+    "distributors and wholesalers (companies that distribute or resell products "
+    "in this market without manufacturing them themselves)",
+    "raw material and ingredient suppliers, and equipment/technology/machinery "
+    "providers that serve this market",
+]
+
+
+def build_category_diversity_query(mu: MarketUnderstanding, role_description: str) -> str:
+    """Build a query focused specifically on one under-represented role
+    (e.g. distributors, or suppliers/technology providers), reusing the
+    same brief as context so the market definition and inclusion/exclusion
+    rules still apply -- only the role focus changes."""
+    if mu.brief.strip():
+        role_focused = (
+            f"{mu.brief.strip()}\n\n"
+            f"For this specific query, focus ONLY on identifying real, verifiable "
+            f"{role_description}. Do not list manufacturers or brand owners here -- "
+            f"only the role described above."
+        )
+        return ACCURACY_PREFIX + role_focused + ACCURACY_SUFFIX
+
+    hint = _category_hint(mu.category_prompt)
+    base = (
+        f"Identify and provide a validated list of real, verifiable {role_description} "
+        f"operating in the {mu.market_name} ({mu.geography}). {hint} {TABLE_FORMAT_HINT}"
+    )
+    return ACCURACY_PREFIX + base + ACCURACY_SUFFIX
+
+
 def build_retry_query(mu: MarketUnderstanding, attempt: int, already_found: list[str]) -> str:
     """Build a follow-up query for a retry attempt, explicitly asking for
     companies not already found, to reduce duplicate-heavy responses."""
@@ -232,11 +270,26 @@ def discover_via_google_ai_mode(
             # results yet) -- duplicates across the round are still caught
             # by seen_names when merging results afterwards.
             already_found = [c.name for c in candidates]
-            queries = [
-                build_primary_query(mu) if attempts_run == 0 and i == 0
-                else build_retry_query(mu, attempts_run + i + 1, already_found)
-                for i in range(round_size)
-            ]
+
+            queries: list[str] = []
+            if attempts_run == 0:
+                # Reserve a couple of round-1 slots specifically for the
+                # categories a broad query tends to miss, instead of every
+                # slot asking the same broad question -- this is the fix
+                # for a real run that came back 100% Manufacturer/Parent
+                # Company/Brand with zero Distributors or Suppliers.
+                queries.append(build_primary_query(mu))
+                for role_description in CATEGORY_DIVERSITY_QUERIES:
+                    if len(queries) >= round_size:
+                        break
+                    queries.append(build_category_diversity_query(mu, role_description))
+                while len(queries) < round_size:
+                    queries.append(build_retry_query(mu, attempts_run + len(queries) + 1, already_found))
+            else:
+                queries = [
+                    build_retry_query(mu, attempts_run + i + 1, already_found)
+                    for i in range(round_size)
+                ]
 
             logger.info(
                 "Google AI Mode discovery round: launching %d parallel attempt(s) "
