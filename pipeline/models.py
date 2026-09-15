@@ -65,3 +65,5 @@ class ClassifiedCompany:
     evidence_source: str
     source_url: str
     is_relevant: bool = True
+    brand_name: str = ""
+    parent_or_independent: str = "Independent"

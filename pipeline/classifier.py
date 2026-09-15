@@ -28,8 +28,9 @@ def classify_one(client: DeepSeekClient, candidate: VerifiedCandidate, mu: Marke
         logger.warning("Classification failed for %s: %s", candidate.name, e)
         return None
 
+    company_name = data.get("company_name") or candidate.name
     return ClassifiedCompany(
-        company_name=data.get("company_name") or candidate.name,
+        company_name=company_name,
         website=candidate.domain,
         hq_country=data.get("hq_country", ""),
         operates_in_target_geography=bool(data.get("operates_in_target_geography", False)),
@@ -41,6 +42,8 @@ def classify_one(client: DeepSeekClient, candidate: VerifiedCandidate, mu: Marke
         evidence_source=candidate.source,
         source_url=candidate.url or f"https://{candidate.domain}",
         is_relevant=bool(data.get("is_relevant", False)),
+        brand_name=data.get("brand_name") or company_name,
+        parent_or_independent=data.get("parent_or_independent") or "Independent",
     )
 
 
