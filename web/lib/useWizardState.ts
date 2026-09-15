@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 export interface WizardState {
   market: string;
   geography: string;
-  categoryPrompt: string;
   mode: "write" | "describe";
   sections: { name: string; description: string }[];
   freeformBrief: string;
@@ -14,7 +13,6 @@ export interface WizardState {
 const DEFAULT_STATE: WizardState = {
   market: "",
   geography: "Global",
-  categoryPrompt: "",
   mode: "write",
   sections: [{ name: "", description: "" }],
   freeformBrief: "",
