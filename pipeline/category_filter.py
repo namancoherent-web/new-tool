@@ -66,6 +66,17 @@ def _canonical_category(category_text: str) -> str | None:
 
 
 def matches_category(company_category: str, user_category_prompt: str) -> bool:
+    # The web UI lets a user pick multiple categories at once (e.g.
+    # "Manufacturers , suppliers , Parent Companies"), joined into one
+    # comma-separated string -- treating that whole string as a single
+    # phrase to resolve against the synonym table matched nothing (no
+    # single canonical category equals a 3-category phrase) and silently
+    # dropped every company, regardless of its real classification. Each
+    # comma-separated part is resolved independently and OR'd together.
+    requested_parts = [p for p in user_category_prompt.split(",") if p.strip()]
+    if len(requested_parts) > 1:
+        return any(matches_category(company_category, part) for part in requested_parts)
+
     target = _canonical_category(user_category_prompt)
     company_canonical = _canonical_category(company_category)
 
