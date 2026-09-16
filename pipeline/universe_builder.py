@@ -225,7 +225,8 @@ def run_universe_search(
 
     check_cancelled()
     report("Classifying", f"{total_verified} verified candidates (Google AI Mode)")
-    classified = verify_and_classify_via_ai_mode(verified_ok, mu)
+    classified = verify_and_classify_via_ai_mode(verified_ok, mu, cancel_event=cancel_event)
+    check_cancelled()
 
     no_category_filter = _is_no_filter_prompt(category_prompt)
     if no_category_filter:
