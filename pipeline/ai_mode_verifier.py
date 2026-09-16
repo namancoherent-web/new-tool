@@ -5,6 +5,7 @@ import logging
 import re
 import shutil
 import tempfile
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -151,7 +152,9 @@ def _run_one_verify_batch(query: str, label: str) -> tuple[str, dict]:
 
 
 def verify_and_classify_via_ai_mode(
-    candidates: list[VerifiedCandidate], mu: MarketUnderstanding
+    candidates: list[VerifiedCandidate],
+    mu: MarketUnderstanding,
+    cancel_event: threading.Event | None = None,
 ) -> list[ClassifiedCompany]:
     """Replaces DeepSeek classification entirely: batches discovered
     candidates into groups of VERIFY_BATCH_SIZE, sends each batch to
@@ -160,7 +163,13 @@ def verify_and_classify_via_ai_mode(
     back into ClassifiedCompany records. A company AI Mode doesn't
     explicitly confirm is dropped as not relevant rather than kept by
     default -- silence is treated as "could not verify", not "assume
-    it's fine"."""
+    it's fine".
+
+    cancel_event, if given, is checked between rounds (not mid-round, for
+    the same reason as discovery -- a browser mid-query can't be safely
+    interrupted). Without this, clicking Stop while verification is
+    running (which can take minutes) did nothing until the whole step
+    finished on its own -- confirmed as a real user-facing bug."""
     if not candidates:
         return []
 
@@ -172,6 +181,9 @@ def verify_and_classify_via_ai_mode(
 
     with ThreadPoolExecutor(max_workers=PARALLEL_VERIFY_BATCHES) as executor:
         for round_start in range(0, len(batches), PARALLEL_VERIFY_BATCHES):
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("Verification cancelled by user after %d/%d batch(es)", round_start, len(batches))
+                break
             round_batches = batches[round_start:round_start + PARALLEL_VERIFY_BATCHES]
             futures = {}
             for i, batch in enumerate(round_batches):
