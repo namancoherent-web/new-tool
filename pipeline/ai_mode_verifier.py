@@ -226,12 +226,19 @@ def _cell(cells: list[str], idx: int | None) -> str:
 # real remedy is waiting once before giving up on this batch.
 RATE_LIMIT_BACKOFF_SECONDS = 45
 
+# Total attempts per batch, covering both a Google-side rate limit and a
+# transient browser/Selenium fault. Losing a batch costs up to
+# VERIFY_BATCH_SIZE real companies (they get marked not relevant), so a
+# couple of extra attempts is cheap insurance against a flaky browser.
+VERIFY_ATTEMPTS = 3
+TRANSIENT_RETRY_SECONDS = 5
+
 
 def _run_one_verify_batch(query: str, label: str) -> tuple[str, dict]:
     """Run a single verification query in its own throwaway Chromium
     profile so batches can run concurrently without colliding on a shared
     --user-data-dir lock file, same pattern as discovery attempts."""
-    for retry in range(2):
+    for retry in range(VERIFY_ATTEMPTS):
         profile_dir = str(Path(tempfile.gettempdir()) / f"ai_mode_verify_profile_{uuid.uuid4().hex[:8]}")
         try:
             from google_ai_scraper import GoogleAIModeScraper
@@ -248,9 +255,9 @@ def _run_one_verify_batch(query: str, label: str) -> tuple[str, dict]:
                     except Exception:
                         pass
             if result.get("rate_limited"):
-                if retry == 0:
+                if retry < VERIFY_ATTEMPTS - 1:
                     logger.warning(
-                        "Verification batch %s hit Google's rate limit -- waiting %ds before one retry",
+                        "Verification batch %s hit Google's rate limit -- waiting %ds before retry",
                         label, RATE_LIMIT_BACKOFF_SECONDS,
                     )
                     time.sleep(RATE_LIMIT_BACKOFF_SECONDS)
@@ -258,13 +265,35 @@ def _run_one_verify_batch(query: str, label: str) -> tuple[str, dict]:
                 logger.warning("Verification batch %s still rate-limited after backoff -- giving up", label)
                 return label, {}
             if not result.get("success"):
-                logger.warning("Verification batch %s failed: %s", label, result.get("error"))
+                if retry < VERIFY_ATTEMPTS - 1:
+                    logger.warning(
+                        "Verification batch %s failed (%s) -- retrying in a fresh browser",
+                        label, result.get("error"),
+                    )
+                    time.sleep(TRANSIENT_RETRY_SECONDS)
+                    continue
+                logger.warning("Verification batch %s failed after %d attempts: %s",
+                               label, VERIFY_ATTEMPTS, result.get("error"))
                 return label, {}
             return label, {"answer": result.get("answer") or "", "tables": result.get("tables") or []}
         except google_ai_mode.ChromiumNotFoundError:
             raise
         except Exception as e:
-            logger.warning("Verification batch %s errored: %s", label, e)
+            # A transient Selenium/browser fault ("element not interactable",
+            # a stale element, a renderer crash) must not permanently lose the
+            # batch. Confirmed as a real, expensive failure: one such error on
+            # a single batch silently dropped 40 genuine companies (Sealed Air,
+            # Klockner Pentaplast, Toray, Uflex, 3M, Avery Dennison, ...) from
+            # a real run, because a batch that returns nothing has every one of
+            # its companies marked not relevant. Retry in a brand-new browser
+            # profile before accepting that loss.
+            if retry < VERIFY_ATTEMPTS - 1:
+                logger.warning(
+                    "Verification batch %s errored (%s) -- retrying in a fresh browser", label, e
+                )
+                time.sleep(TRANSIENT_RETRY_SECONDS)
+                continue
+            logger.warning("Verification batch %s errored after %d attempts: %s", label, VERIFY_ATTEMPTS, e)
             return label, {}
         finally:
             shutil.rmtree(profile_dir, ignore_errors=True)

@@ -117,11 +117,12 @@ def _mentions_from_table(table_md: str) -> list[AiModeCompanyMention]:
 # or a finished sentence. Anchored to the FRONT of a captured name so only
 # leading noise is removed -- a period inside the name itself ("H.B. Fuller",
 # "Crocco S.p.A.") is never touched.
+# Any TLD-shaped token is stripped rather than an explicit country list --
+# a fixed list inevitably misses one (".ae" was missing and left
+# "adnoc.ae Sasol Limited" as a company name), and this must work for every
+# market/geography a user asks about, not just the ones seen so far.
 _LEADING_DOMAIN_OR_TLD = re.compile(
-    r"^(?:[a-z0-9][a-z0-9-]*\.)?(?:com|co|net|org|in|io|de|fr|it|uk|eu|biz|tw|jp|kr|"
-    r"cz|sk|hr|rs|hu|ro|md|ua|kz|lv|lt|se|no|fi|es|pt|ph|th|my|sg|hk|id|ru|ag|nl|ca|"
-    r"za|sa|br|cn|gr|mx|au|ch|at|be|dk|ie|pl|tr)(?:\.[a-z]{2,3})*\b[\s.]*",
-    re.IGNORECASE,
+    r"^(?:[a-z0-9][a-z0-9-]*\.)?[a-z]{2,6}(?:\.[a-z]{2,3})*\b[\s.]*(?=[A-Z0-9])",
 )
 
 
@@ -138,6 +139,32 @@ _SECTION_HEADING_PREFIX = re.compile(
     r"Producers?|Players?|Companies|Brands?|Vendors?|Distributors?|Converters?)\b)*[\s:—–-]*",
     re.IGNORECASE,
 )
+
+
+# A bare region/segment heading directly in front of a company name, with no
+# "Manufacturers/Suppliers" word after it ("Asia-Pacific Toppan", "Latin
+# America Vitopel", "Middle East & Africa Taghleef Industries LLC",
+# "Specialty & Technical Film Segments 3M Company"). Confirmed in a real run.
+# Requires a capitalised company token to follow, so a company whose real name
+# genuinely starts with a region word is not truncated to nothing.
+_BARE_REGION_PREFIX = re.compile(
+    r"^(?:Asia[- ]Pacific|Latin\s+America|North\s+America|South\s+America|"
+    r"Middle\s+East(?:\s*(?:&|and)\s*Africa)?|Europe|EMEA|APAC|"
+    r"Specialty\s*(?:&|and)\s*Technical\s+Film\s+Segments?)\s+(?=[A-Z0-9])",
+    re.IGNORECASE,
+)
+
+# A name that is only a corporate suffix or a bare generic word is a leftover
+# fragment, never a company ("Inc.", "Group", "p.A.", "r.l.", "LLC").
+_FRAGMENT_ONLY_NAME = re.compile(
+    r"^(?:inc|ltd|llc|plc|corp|co|group|holdings?|limited|gmbh|ag|sa|nv|bv|"
+    r"p\.?a|r\.?l|s\.?p\.?a|s\.?a\.?r\.?l|kg|kgaa|oyj|ab|as|pte|pvt|berhad|tbk)\.?$",
+    re.IGNORECASE,
+)
+
+
+def is_fragment_only_name(name: str) -> bool:
+    return bool(_FRAGMENT_ONLY_NAME.match(name.strip()))
 
 
 def _trim_leading_noise(name: str) -> str:
@@ -159,12 +186,19 @@ def _trim_leading_noise(name: str) -> str:
             r"(?<![A-Z])(?<!\.[a-z])(?<!\.[a-z][a-z])(?<!\.[a-z][a-z][a-z])"
             r"(?<!\bCo)(?<!\bInc)(?<!\bLtd)(?<!\bCorp)(?<!\bPvt)(?<!\bPte)(?<!\bBros)"
             r"(?<!\bSt)(?<!\bMfg)(?<!\bIndus)(?<!\bPlc)(?<!\bGmbH)(?<!\bSA)(?<!\bAG)"
+            # Personal/professional titles that legitimately start a company
+            # name ("Dr. Reddy's Laboratories", "St. Jude Medical") -- without
+            # these the title was read as a sentence end and the name was
+            # truncated. Applies to any market, not just the one being tested.
+            r"(?<!\bDr)(?<!\bMr)(?<!\bMrs)(?<!\bMs)(?<!\bProf)(?<!\bSte)(?<!\bMt)"
+            r"(?<!\bNo)(?<!\bJr)(?<!\bSr)(?<!\bMessrs)"
             r"\.\s+",
             name,
         )
         if len(sentence_split) > 1 and sentence_split[-1].strip():
             name = sentence_split[-1].strip()
         name = _SECTION_HEADING_PREFIX.sub("", name).strip()
+        name = _BARE_REGION_PREFIX.sub("", name).strip()
         name = _LEADING_DOMAIN_OR_TLD.sub("", name).strip()
         # A leading ALL-CAPS/short technical token followed by a period is a
         # description tail ("BOPP. Polyplex Corporation"), not part of the
@@ -236,7 +270,7 @@ def _mentions_from_text(answer_text: str) -> list[AiModeCompanyMention]:
     # entry (a domain fragment or a finished sentence) off the front of the
     # captured name, which a single regex cannot reliably do on its own.
     entry_start = re.compile(
-        r"(?P<name>[A-Za-z0-9][A-Za-z0-9&.,'’À-ÿ\-]*(?:\s+[A-Za-z0-9&.,'’À-ÿ\-]+){0,7})"
+        r"(?P<name>[A-Za-z0-9][A-Za-z0-9&.,'’À-ÿ\-]*(?:\s+[A-Za-z0-9&.,'’À-ÿ\-]+){0,10})"
         r"\*{0,2}\s*"
         r"\((?P<paren>[A-Za-z0-9][A-Za-z0-9 /.&'’-]{1,60})\)"
         r"\s*[-–—:]\s*",
@@ -259,9 +293,21 @@ def _mentions_from_text(answer_text: str) -> list[AiModeCompanyMention]:
         # sentence-boundary false-positive inside "Loacker S.p.A.") is not
         # a usable company name on its own.
         words = [w.lower() for w in name.split()]
-        if len(name) < 2 or len(name) > 80 or any(w in _GENERIC_LINE_WORDS for w in words):
+        # A leading article is ignored when testing for generic prose words --
+        # plenty of real companies legitimately begin with "The" ("The Goldman
+        # Sachs Group, Inc.", "The Dow Chemical Company", "The Coca-Cola
+        # Company") and were being dropped entirely by this filter.
+        meaningful_words = words[1:] if words[:1] == ["the"] else words
+        if len(name) < 2 or len(name) > 80 or any(w in _GENERIC_LINE_WORDS for w in meaningful_words):
             continue
         if len(name) <= 3 and name.rstrip(".").isalpha():
+            continue
+        if is_fragment_only_name(name):
+            continue
+        # An all-lowercase match is a fragment of a domain or description
+        # ("coca" out of "coca-colacompany.com"), never an extracted
+        # company name -- AI Mode always capitalises real company names.
+        if name.islower():
             continue
 
         # description runs from the end of this match to the start of the
@@ -364,9 +410,21 @@ def _mentions_from_dash_domain_text(answer_text: str) -> list[AiModeCompanyMenti
         if _DOMAIN_PATTERN.search(name):
             continue
         words = [w.lower() for w in name.split()]
-        if len(name) < 2 or len(name) > 80 or any(w in _GENERIC_LINE_WORDS for w in words):
+        # A leading article is ignored when testing for generic prose words --
+        # plenty of real companies legitimately begin with "The" ("The Goldman
+        # Sachs Group, Inc.", "The Dow Chemical Company", "The Coca-Cola
+        # Company") and were being dropped entirely by this filter.
+        meaningful_words = words[1:] if words[:1] == ["the"] else words
+        if len(name) < 2 or len(name) > 80 or any(w in _GENERIC_LINE_WORDS for w in meaningful_words):
             continue
         if len(name) <= 3 and name.rstrip(".").isalpha():
+            continue
+        if is_fragment_only_name(name):
+            continue
+        # An all-lowercase match is a fragment of a domain or description
+        # ("coca" out of "coca-colacompany.com"), never an extracted
+        # company name -- AI Mode always capitalises real company names.
+        if name.islower():
             continue
 
         domain_raw = m.group("domain").strip()
@@ -411,9 +469,21 @@ def _mentions_from_bare_domain_paren(answer_text: str) -> list[AiModeCompanyMent
         if _DOMAIN_PATTERN.search(name):
             continue
         words = [w.lower() for w in name.split()]
-        if len(name) < 2 or len(name) > 80 or any(w in _GENERIC_LINE_WORDS for w in words):
+        # A leading article is ignored when testing for generic prose words --
+        # plenty of real companies legitimately begin with "The" ("The Goldman
+        # Sachs Group, Inc.", "The Dow Chemical Company", "The Coca-Cola
+        # Company") and were being dropped entirely by this filter.
+        meaningful_words = words[1:] if words[:1] == ["the"] else words
+        if len(name) < 2 or len(name) > 80 or any(w in _GENERIC_LINE_WORDS for w in meaningful_words):
             continue
         if len(name) <= 3 and name.rstrip(".").isalpha():
+            continue
+        if is_fragment_only_name(name):
+            continue
+        # An all-lowercase match is a fragment of a domain or description
+        # ("coca" out of "coca-colacompany.com"), never an extracted
+        # company name -- AI Mode always capitalises real company names.
+        if name.islower():
             continue
 
         domain_raw = m.group("domain").strip()
