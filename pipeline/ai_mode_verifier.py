@@ -63,6 +63,40 @@ def _build_verify_query(mu: MarketUnderstanding, batch: list[VerifiedCandidate])
 
 _TABLE_ROW_PATTERN = re.compile(r"^\|(.+)\|$", re.MULTILINE)
 
+# A real company name cell should not start with a bare domain-suffix
+# fragment (leftover from the previous row's website getting merged in)
+# or with lowercase disclaimer prose (leftover from a footnote like "...
+# have been omitted as requested." bleeding into the next cell).
+_GARBAGE_NAME_PREFIX = re.compile(
+    r"^(com(\.[a-z]{2,3})?\b|have been|were omitted|as requested|and\s)", re.IGNORECASE
+)
+
+
+def _looks_like_company_name(name: str) -> bool:
+    if _GARBAGE_NAME_PREFIX.match(name):
+        return False
+    # A cell that is itself a full sentence (a leaked description like
+    # "Porcelain and ceramic tile surfaces provider. Porcelona") is not a
+    # name either, even though it starts uppercase -- multiple words
+    # followed by a mid-string ". " (sentence boundary) is the signal.
+    if re.search(r"\.\s+\S", name):
+        return False
+    # A real name starts with an uppercase letter/digit, not a lowercase
+    # word (lowercase-first almost always means it's the tail of a
+    # sentence that leaked into the cell, not an actual company name).
+    return name[:1].isupper() or name[:1].isdigit()
+
+
+def _recover_name_from_garbage(name: str) -> str:
+    """A corrupted cell often still has the real company name as the tail
+    of the fragment, after either a sentence boundary ('have been omitted
+    as requested. Akgün Seramik' -> 'Akgün Seramik') or a leaked bare
+    domain-suffix prefix ('com.tr Karaca' -> 'Karaca'). Best-effort only."""
+    parts = re.split(r"[.]\s+", name)
+    tail = parts[-1].strip() if parts else ""
+    tail = re.sub(r"^(com(\.[a-z]{2,3})?|and)\s+", "", tail, flags=re.IGNORECASE).strip()
+    return tail if tail and (tail[:1].isupper() or tail[:1].isdigit()) else ""
+
 
 def _parse_verify_table(answer_text: str, tables: list[str], batch_names: set[str]) -> dict[str, dict]:
     """Parse AI Mode's verification response into {company_name_lower: {...}}.
@@ -99,6 +133,24 @@ def _parse_verify_table(answer_text: str, tables: list[str], batch_names: set[st
             name = re.sub(r"\*\*|\[|\]\([^)]*\)", "", cells[name_idx]).strip()
             if not name or name.lower() in {"-", "n/a"}:
                 continue
+            if not _looks_like_company_name(name):
+                # AI Mode occasionally renders a malformed row -- a
+                # trailing domain-suffix fragment (".com", ".com.tr") or a
+                # disclaimer sentence ("... have been omitted as
+                # requested.") bleeding into what should be the next row's
+                # name cell -- confirmed via a real run where 19 real
+                # companies (including well-known ones like Vitra) were
+                # silently dropped because their verdict row's name cell
+                # got corrupted this way. Try to recover the real company
+                # name from the tail of the fragment (after the last
+                # sentence-ending period) instead of accepting garbage or
+                # silently losing the row.
+                recovered = _recover_name_from_garbage(name)
+                if recovered and recovered.lower() in batch_names:
+                    name = recovered
+                else:
+                    logger.warning("Skipping malformed verification row (name cell looked corrupted): %r", name)
+                    continue
             key = name.lower()
             results[key] = {
                 "company_name": name,

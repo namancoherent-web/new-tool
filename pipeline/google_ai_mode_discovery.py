@@ -47,6 +47,22 @@ MIN_TARGET_COMPANIES = 200
 # is the most reliable lever against that variance.
 MAX_DISCOVERY_ATTEMPTS = 12
 
+# Some markets are genuinely narrow (e.g. "Porcelain Market in Turkey" --
+# confirmed by direct manual testing that Google AI Mode itself, asked the
+# exact same question with no automation involved, only produces ~60
+# distinctly-named companies before running out of ones it's confident are
+# real). MIN_TARGET_COMPANIES (200) is aspirational for broad markets, but
+# a niche market finishing under this floor after the normal attempt
+# budget should get extra widened rounds rather than being accepted as
+# final -- confirmed directly that explicitly asking AI Mode to widen into
+# adjacent supply-chain categories (raw material suppliers, component
+# suppliers, trade houses) surfaced ~50 more real companies in one extra
+# response for the same narrow market. NICHE_MARKET_FLOOR is the bar this
+# extension phase tries to clear; MAX_EXTRA_NICHE_ATTEMPTS caps how far it
+# will go so a truly tiny market doesn't burn attempts forever.
+NICHE_MARKET_FLOOR = 90
+MAX_EXTRA_NICHE_ATTEMPTS = 10
+
 TABLE_FORMAT_HINT = (
     "as a table with columns: Company Name, Headquarter Country, Core Products/Brands, "
     "Official Website."
@@ -176,7 +192,17 @@ def build_category_diversity_query(mu: MarketUnderstanding, role_description: st
 
 def build_retry_query(mu: MarketUnderstanding, attempt: int, already_found: list[str]) -> str:
     """Build a follow-up query for a retry attempt, explicitly asking for
-    companies not already found, to reduce duplicate-heavy responses."""
+    companies not already found, to reduce duplicate-heavy responses.
+
+    Beyond a certain attempt, just repeating "find more, excluding this
+    list" plateaus fast -- confirmed directly: manually re-asking AI Mode
+    for "more of the same" for a niche market (Turkish porcelain) returned
+    almost nothing new, but explicitly asking it to widen into adjacent
+    supply-chain categories (raw material/mineral suppliers, component
+    suppliers, glaze/frit developers, trade houses/wholesalers) surfaced
+    ~50 additional real companies in one response. So once a few retries
+    have run, the exclusion note also explicitly invites those adjacent
+    categories instead of only asking for "more of the same kind"."""
     base = build_primary_query(mu)
     if not already_found:
         return base
@@ -187,6 +213,15 @@ def build_retry_query(mu: MarketUnderstanding, attempt: int, already_found: list
         f"Find additional real companies not on this list, including smaller regional and "
         f"lesser-known players."
     )
+    if attempt >= 3:
+        exclusion_note += (
+            " The primary list above may already cover the best-known manufacturers and brand "
+            "owners -- to find more real companies, widen into the broader supply chain and "
+            "adjacent tiers: raw material and mineral processors/suppliers, component suppliers, "
+            "industrial glaze/frit/chemical developers, private-label and tier-2 regional "
+            "producers, and trade houses/wholesalers/distributors serving this market. Only "
+            "include ones you are confident genuinely operate in or supply this specific market."
+        )
     return base + exclusion_note
 
 
@@ -279,14 +314,20 @@ def discover_via_google_ai_mode(
     candidates: list[EnrichedCandidate] = []
     attempts_run = 0
     consecutive_zero_rounds = 0
+    # Raised past MAX_DISCOVERY_ATTEMPTS once the normal budget is
+    # exhausted, if the result is still under NICHE_MARKET_FLOOR -- see
+    # the extension check after the loop below. Kept as a separate
+    # variable (not a reassignment of the module constant) so concurrent
+    # runs never interfere with each other.
+    attempt_budget = MAX_DISCOVERY_ATTEMPTS
 
     with ThreadPoolExecutor(max_workers=PARALLEL_ATTEMPTS_PER_ROUND) as executor:
         while (
-            attempts_run < MAX_DISCOVERY_ATTEMPTS
+            attempts_run < attempt_budget
             and len(candidates) < MIN_TARGET_COMPANIES
             and not (cancel_event is not None and cancel_event.is_set())
         ):
-            round_size = min(PARALLEL_ATTEMPTS_PER_ROUND, MAX_DISCOVERY_ATTEMPTS - attempts_run)
+            round_size = min(PARALLEL_ATTEMPTS_PER_ROUND, attempt_budget - attempts_run)
             # Every attempt in a round is built from the SAME already_found
             # snapshot (since they run concurrently, none can see another's
             # results yet) -- duplicates across the round are still caught
@@ -406,6 +447,75 @@ def discover_via_google_ai_mode(
                     break
             else:
                 consecutive_zero_rounds = 0
+
+        # Extension phase: the normal attempt budget is exhausted (or
+        # early-stopped) but the result is still under NICHE_MARKET_FLOOR --
+        # give it more attempts using the widened supply-chain-aware retry
+        # query (build_retry_query already broadens scope once attempt >=
+        # 3) instead of accepting a low count as final. Only runs once per
+        # discovery call, capped at MAX_EXTRA_NICHE_ATTEMPTS extra attempts,
+        # and still respects cancellation between rounds.
+        if (
+            len(candidates) < NICHE_MARKET_FLOOR
+            and len(candidates) < MIN_TARGET_COMPANIES
+            and not (cancel_event is not None and cancel_event.is_set())
+        ):
+            logger.warning(
+                "Only %d companies after the normal %d-attempt budget (below the %d floor) -- "
+                "this looks like a niche market, running up to %d more widened attempts",
+                len(candidates), attempts_run, NICHE_MARKET_FLOOR, MAX_EXTRA_NICHE_ATTEMPTS,
+            )
+            attempt_budget = attempts_run + MAX_EXTRA_NICHE_ATTEMPTS
+            consecutive_zero_rounds = 0
+            while (
+                attempts_run < attempt_budget
+                and len(candidates) < NICHE_MARKET_FLOOR
+                and len(candidates) < MIN_TARGET_COMPANIES
+                and not (cancel_event is not None and cancel_event.is_set())
+            ):
+                round_size = min(PARALLEL_ATTEMPTS_PER_ROUND, attempt_budget - attempts_run)
+                already_found = [c.name for c in candidates]
+                query_plan = [
+                    (build_retry_query(mu, attempts_run + i + 1, already_found), "")
+                    for i in range(round_size)
+                ]
+                labels = [f"niche-attempt-{attempts_run + i + 1}" for i in range(round_size)]
+                futures = {
+                    executor.submit(_run_one_attempt, q, label): (q, role_hint)
+                    for (q, role_hint), label in zip(query_plan, labels)
+                }
+                new_this_round = 0
+                for future in as_completed(futures):
+                    query_for_future, role_hint_for_future = futures[future]
+                    try:
+                        label, mentions = future.result()
+                    except google_ai_mode.ChromiumNotFoundError as e:
+                        logger.error("Google AI Mode discovery cannot run: %s", e)
+                        for f in futures:
+                            f.cancel()
+                        raise
+                    logger.info("Google AI Mode %s returned %d company mentions", label, len(mentions))
+                    for mention in mentions:
+                        key = mention.name.lower().strip()
+                        if not key or key in seen_names:
+                            continue
+                        seen_names.add(key)
+                        candidates.append(
+                            _mention_to_enriched_candidate(mention, query_for_future, role_hint_for_future)
+                        )
+                        new_this_round += 1
+                attempts_run += round_size
+                logger.info(
+                    "Niche-extension round added %d new companies, running total: %d (floor: %d, %d extra attempts used)",
+                    new_this_round, len(candidates), NICHE_MARKET_FLOOR, attempts_run - (attempt_budget - MAX_EXTRA_NICHE_ATTEMPTS),
+                )
+                if new_this_round == 0:
+                    consecutive_zero_rounds += 1
+                    if consecutive_zero_rounds >= 2:
+                        logger.warning("No new companies in %d consecutive niche-extension rounds -- stopping", consecutive_zero_rounds)
+                        break
+                else:
+                    consecutive_zero_rounds = 0
 
     if len(candidates) < MIN_TARGET_COMPANIES:
         logger.warning(
