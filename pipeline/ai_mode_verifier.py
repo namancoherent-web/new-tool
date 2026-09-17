@@ -58,7 +58,19 @@ def _build_verify_query(mu: MarketUnderstanding, batch: list[VerifiedCandidate])
         f"or \"Parent Company\" if this company IS a parent to others), HQ Country, Reason (one sentence "
         f"citing why it is or is not relevant, and what specifically it makes/does).\n\n"
         f"Cover every single company listed above, in the same order -- do not skip any, even to mark "
-        f"them not relevant. Do not add companies that were not in the list."
+        f"them not relevant. Do not add companies that were not in the list.\n\n"
+        # Same reasoning as the discovery prompt: a JSON array has explicit
+        # field boundaries, so a verdict's company name cannot pick up a
+        # fragment of the previous row (the markdown-table path produced
+        # names like "com Berry Global Inc." and "have been omitted as
+        # requested. Akgun Seramik", which then failed to match the
+        # candidate they belonged to and were dropped as not relevant).
+        # Table parsing stays as a fallback for answers that ignore this.
+        f"Return the answer as a single JSON array inside a ```json code block, one object per "
+        f"company, with exactly these keys: \"name\" (copy the company name exactly as given "
+        f"above), \"is_relevant\" (true or false), \"category\", \"brand_name\", "
+        f"\"parent_or_independent\", \"country\", \"reason\". Output only the JSON array, with "
+        f"no commentary before or after it."
     )
 
 
@@ -137,13 +149,58 @@ def _recover_name_from_garbage(name: str) -> str:
     return ""
 
 
+_JSON_BLOCK = re.compile(r"```(?:json)?\s*(\[.*?\])\s*```", re.DOTALL | re.IGNORECASE)
+_BARE_JSON_ARRAY = re.compile(r"(\[\s*\{.*\}\s*\])", re.DOTALL)
+
+
+def _parse_verify_json(answer_text: str) -> dict[str, dict]:
+    """Read the JSON array of verdicts the verification prompt asks for.
+    Preferred over the markdown-table path because the name field has an
+    explicit boundary and cannot absorb a fragment of the previous row."""
+    blocks = [m.group(1) for m in _JSON_BLOCK.finditer(answer_text)]
+    if not blocks:
+        bare = _BARE_JSON_ARRAY.search(answer_text)
+        if bare:
+            blocks = [bare.group(1)]
+
+    results: dict[str, dict] = {}
+    for block in blocks:
+        try:
+            rows = json.loads(block)
+        except ValueError:
+            continue
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "").strip()
+            if not name:
+                continue
+            relevant = row.get("is_relevant")
+            if isinstance(relevant, str):
+                relevant = relevant.strip().lower().startswith(("y", "t"))
+            results[name.lower()] = {
+                "company_name": name,
+                "is_relevant": bool(relevant),
+                "category": str(row.get("category") or "").strip() or "Other",
+                "brand_name": str(row.get("brand_name") or "").strip() or name,
+                "parent_or_independent": str(row.get("parent_or_independent") or "").strip() or "Independent",
+                "hq_country": str(row.get("country") or "").strip(),
+                "reason": str(row.get("reason") or "").strip(),
+            }
+    if results:
+        logger.info("Parsed %d verdicts from AI Mode's JSON response", len(results))
+    return results
+
+
 def _parse_verify_table(answer_text: str, tables: list[str], batch_names: set[str]) -> dict[str, dict]:
     """Parse AI Mode's verification response into {company_name_lower: {...}}.
-    Tries markdown tables first (most reliable when AI Mode cooperates),
-    falls back to a looser per-line parse of the flattened prose if no
-    table is present -- mirroring the same tolerance discovery parsing
-    needed for AI Mode's inconsistent response shapes."""
-    results: dict[str, dict] = {}
+    Reads the requested JSON array first, then falls back to markdown
+    tables for answers that ignore the format -- mirroring the same
+    tolerance discovery parsing needs for AI Mode's inconsistent response
+    shapes."""
+    results: dict[str, dict] = dict(_parse_verify_json(answer_text))
 
     for table_md in tables:
         lines = [l.strip() for l in table_md.splitlines() if l.strip()]
@@ -202,6 +259,11 @@ def _parse_verify_table(answer_text: str, tables: list[str], batch_names: set[st
                     logger.warning("Skipping malformed verification row (name cell looked corrupted): %r", name)
                     continue
             key = name.lower()
+            # A JSON verdict for this company is authoritative -- it has
+            # clean field boundaries, so it must not be replaced by a
+            # table row for the same name.
+            if key in results:
+                continue
             results[key] = {
                 "company_name": name,
                 "is_relevant": _cell(cells, relevant_idx).lower().startswith("y"),

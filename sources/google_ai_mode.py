@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sys
@@ -498,22 +499,87 @@ def _mentions_from_bare_domain_paren(answer_text: str) -> list[AiModeCompanyMent
     return mentions
 
 
+# A JSON array of company objects, with or without a surrounding ```json
+# fence. The discovery prompt asks for exactly this shape.
+_JSON_BLOCK = re.compile(r"```(?:json)?\s*(\[.*?\])\s*```", re.DOTALL | re.IGNORECASE)
+_BARE_JSON_ARRAY = re.compile(r"(\[\s*\{.*\}\s*\])", re.DOTALL)
+
+
+def _mentions_from_json(answer_text: str) -> list[AiModeCompanyMention]:
+    """Read the structured JSON array the discovery prompt asks for.
+
+    This is the preferred path: unlike every prose parser below it, there is
+    no entry boundary to infer, so a name can never be corrupted by a period
+    inside a domain ("amcor.com"), a corporate suffix ("Henkel AG & Co.
+    KGaA") or a title ("Dr. Reddy's Laboratories") -- the exact failure that
+    produced candidate names like "com Berry Global Inc." and silently lost
+    them during verification. AI Mode does not always honour the format, so
+    the prose parsers remain as a fallback."""
+    blocks = [m.group(1) for m in _JSON_BLOCK.finditer(answer_text)]
+    if not blocks:
+        bare = _BARE_JSON_ARRAY.search(answer_text)
+        if bare:
+            blocks = [bare.group(1)]
+
+    mentions: list[AiModeCompanyMention] = []
+    for block in blocks:
+        try:
+            rows = json.loads(block)
+        except ValueError:
+            continue
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "").strip()
+            if not name or len(name) > 120 or is_fragment_only_name(name):
+                continue
+
+            domain = ""
+            raw_site = str(row.get("website") or "").strip()
+            if raw_site:
+                candidate_domain = extract_domain(
+                    raw_site if raw_site.startswith("http") else "https://" + raw_site
+                )
+                if candidate_domain and not is_junk_domain(candidate_domain):
+                    domain = candidate_domain
+
+            mentions.append(
+                AiModeCompanyMention(
+                    name=name,
+                    hq_country=str(row.get("country") or "").strip(),
+                    products=str(row.get("products") or "").strip(),
+                    domain=domain,
+                )
+            )
+    if mentions:
+        logger.info("Parsed %d companies from AI Mode's JSON response", len(mentions))
+    return mentions
+
+
 def extract_company_mentions(result: dict) -> list[AiModeCompanyMention]:
     """Extract company mentions (name + whatever context is available) from
-    a scraper result dict. Tries, in order: markdown tables, a Python-tuple-
-    list snippet (if AI Mode answered that way), the "Name (Country/domain)
-    – description" prose shape, the "Name — domain.com (Country)" prose
-    shape, and the bare "Name (domain.com)" shape with no separator at all
-    -- an answer can contain more than one shape (e.g. a prose summary
-    followed by a structured code recap), so results from multiple parsers
-    are merged rather than stopping at the first non-empty one, to capture
-    as much of a large answer as possible instead of only whichever shape
-    happens to be tried first."""
+    a scraper result dict.
+
+    The JSON array the prompt asks for is read first, since it carries clean
+    field boundaries and cannot produce a mangled name. Everything after it
+    is a fallback for answers that ignore the requested format: markdown
+    tables, a Python-tuple-list snippet, the "Name (Country/domain) –
+    description" prose shape, the "Name — domain.com (Country)" shape, and
+    the bare "Name (domain.com)" shape with no separator at all. An answer
+    can contain more than one shape (e.g. a prose summary followed by a
+    structured recap), so results from multiple parsers are merged rather
+    than stopping at the first non-empty one."""
     mentions: list[AiModeCompanyMention] = []
+
+    answer_text = result.get("answer") or ""
+    if answer_text:
+        mentions.extend(_mentions_from_json(answer_text))
+
     for table_md in result.get("tables") or []:
         mentions.extend(_mentions_from_table(table_md))
 
-    answer_text = result.get("answer") or ""
     if answer_text:
         mentions.extend(_mentions_from_tuple_list(answer_text))
         mentions.extend(_mentions_from_text(answer_text))

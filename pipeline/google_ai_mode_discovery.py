@@ -94,9 +94,25 @@ ACCURACY_SUFFIX = (
     "similarly-named industry)? Drop any entry you are not confident about rather than include "
     "it. Do not pad the list to reach any particular count -- accuracy matters more than "
     "quantity.\n\n"
-    "For each company, include its official website domain (e.g. company.com) directly next to "
-    "its name if you know it with confidence. Leave it out entirely rather than guess at a domain "
-    "you are not sure of -- an omitted website is fine, a wrong one is not."
+    # Asking for JSON removes the need to guess where one company ends and
+    # the next begins. AI Mode's prose answers arrive as one continuous
+    # string with no line breaks, so the text parser had to infer entry
+    # boundaries from punctuation -- and periods appear inside domains
+    # ("amcor.com"), corporate suffixes ("Henkel AG & Co. KGaA") and titles
+    # ("Dr. Reddy's Laboratories") just as they do at the end of a sentence.
+    # That produced corrupted candidate names ("com Berry Global Inc.",
+    # "KGaA"), which then failed to match their verdict during verification
+    # and were silently dropped as not relevant. With JSON there is no
+    # boundary to infer: the name field is the name. The prose parsers stay
+    # in place as a fallback for when AI Mode ignores this instruction,
+    # which it sometimes does.
+    "Return your answer as a single JSON array inside a ```json code block, with one object "
+    "per company and exactly these keys: \"name\" (the full official company name), "
+    "\"country\" (headquarters country, or \"\" if unsure), \"website\" (official domain such "
+    "as company.com, or \"\" if you are not confident), \"products\" (a short phrase describing "
+    "what it makes or does in this market). Output only the JSON array -- no commentary before "
+    "or after it. Never guess a website: an empty string is correct when unsure, a wrong domain "
+    "is not."
 )
 
 
