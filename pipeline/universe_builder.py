@@ -237,6 +237,16 @@ def run_universe_search(
         report("Applying category filter", f"target category: {category_prompt}")
         kept, dropped = apply_golden_rule(classified, category_prompt)
 
+    # Rejected companies and their reasons were computed but never surfaced,
+    # which made it impossible to tell whether a large drop meant discovery
+    # was pulling in irrelevant companies (fixable in the discovery prompt)
+    # or verification was being too strict. Logging a sample of the actual
+    # reasons makes that visible without dumping every rejection.
+    if dropped:
+        logger.info("Verification rejected %d of %d companies -- sample reasons:", len(dropped), len(classified))
+        for c in dropped[:15]:
+            logger.info("  rejected %r: %s", c.company_name, (c.reason or "(no reason given)")[:160])
+
     report("Deduplicating", f"{len(kept)} companies before dedup")
     final_companies = deduplicate(kept)
     final_companies.sort(key=lambda c: (-c.confidence, c.company_name.lower()))

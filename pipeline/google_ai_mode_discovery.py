@@ -94,6 +94,19 @@ ACCURACY_SUFFIX = (
     "similarly-named industry)? Drop any entry you are not confident about rather than include "
     "it. Do not pad the list to reach any particular count -- accuracy matters more than "
     "quantity.\n\n"
+    # Discovery previously used a looser relevance bar than the verification
+    # step that follows it, so it surfaced companies that were then rejected:
+    # a real run discovered 283 companies and verification threw out 152 of
+    # them. Stating the same test here means the companies that come back
+    # are the ones that will survive, instead of being found twice and
+    # discarded once.
+    "Apply this test to each company before including it: does this company itself actually "
+    "make, supply, or sell the specific product described above as a real part of its business? "
+    "Exclude companies that only operate in a broader or adjacent industry, that merely use or "
+    "buy this product rather than provide it, that supply machinery or equipment for making it "
+    "unless the request asks for equipment makers, and parent conglomerates whose connection is "
+    "only through an unrelated division. If the company does not clearly pass that test, leave "
+    "it out.\n\n"
     # Asking for JSON removes the need to guess where one company ends and
     # the next begins. AI Mode's prose answers arrive as one continuous
     # string with no line breaks, so the text parser had to infer entry

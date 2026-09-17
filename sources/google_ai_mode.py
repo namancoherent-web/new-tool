@@ -546,11 +546,24 @@ def _mentions_from_json(answer_text: str) -> list[AiModeCompanyMention]:
     mentions: list[AiModeCompanyMention] = []
     for row in rows:
         name = str(row.get("name") or "").strip()
+        # AI Mode sometimes puts the website inside the name field as well
+        # ("Accredo Packaging (accredopackaging.com)"). Left in place it
+        # reaches the export as part of the company name, and creates a
+        # false duplicate of the same company written without it
+        # ("Flex Films (flexfilm.com)" alongside "Flex Films (USA) Inc.").
+        # A trailing parenthetical that is a bare domain is never part of a
+        # real company name, so it is removed; other parentheticals (e.g.
+        # "(USA)") are genuine and kept.
+        name_domain = re.search(r"\s*\((\s*[a-z0-9][a-z0-9.-]*\.[a-z]{2,}[^)]*)\)\s*$", name, re.IGNORECASE)
+        if name_domain:
+            name = name[: name_domain.start()].strip()
         if not name or len(name) > 120 or is_fragment_only_name(name):
             continue
 
         domain = ""
         raw_site = str(row.get("website") or "").strip()
+        if not raw_site and name_domain:
+            raw_site = name_domain.group(1).strip()
         if raw_site:
             candidate_domain = extract_domain(
                 raw_site if raw_site.startswith("http") else "https://" + raw_site
