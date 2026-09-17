@@ -238,8 +238,38 @@ class GoogleAIModeScraper:
         delay = random.uniform(min_sec, max_sec)
         time.sleep(delay)
 
+    # Above this length, typing character-by-character (even at the fast
+    # end of the human-like delay range) takes minutes -- confirmed
+    # directly: a real ~3000-char verification query took 150-450s just to
+    # type before AI Mode even started generating, with no visible
+    # progress, which is what "this takes too much time" was reporting.
+    # Long queries are already the case where the URL-query fast path just
+    # got disabled (see MAX_URL_QUERY_LENGTH) for reliability, so typing
+    # needs its own fast path here rather than making the browser wait
+    # through a multi-minute keystroke simulation.
+    FAST_TYPE_THRESHOLD = 200
+
     def human_type(self, element, text):
-        """Type text with human-like variation"""
+        """Type text with human-like variation for short queries. For long
+        queries (see FAST_TYPE_THRESHOLD), set the value directly via JS
+        and dispatch an input event instead -- instant, and the framework
+        (React/whatever backs the search box) still sees the change since
+        the event fires, but there's no realistic way to "look human" while
+        typing thousands of characters anyway, so the tradeoff is clearly
+        worth it."""
+        if len(text) > self.FAST_TYPE_THRESHOLD:
+            self.driver.execute_script(
+                """
+                const el = arguments[0];
+                const text = arguments[1];
+                el.value = text;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                """,
+                element,
+                text,
+            )
+            return
         for char in text:
             element.send_keys(char)
             time.sleep(random.uniform(0.05, 0.15))
