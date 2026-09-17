@@ -201,7 +201,7 @@ def _parse_verify_json(answer_text: str) -> dict[str, dict]:
         if not isinstance(row, dict):
             continue
         name = str(row.get("name") or "").strip()
-        if not name:
+        if not name or google_ai_mode.is_own_prompt_placeholder(name):
             continue
         relevant = row.get("is_relevant")
         if isinstance(relevant, str):
@@ -320,6 +320,21 @@ RATE_LIMIT_BACKOFF_SECONDS = 45
 # couple of extra attempts is cheap insurance against a flaky browser.
 VERIFY_ATTEMPTS = 3
 TRANSIENT_RETRY_SECONDS = 5
+
+
+def _dump_low_yield_verify_answer(label: str, answer_text: str, batch_names: set[str]) -> None:
+    try:
+        out_dir = Path(__file__).resolve().parent.parent / "logs" / "low_verify_dumps"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{int(time.time())}_{label}_{len(batch_names)}sent.txt"
+        path.write_text(
+            f"Companies sent ({len(batch_names)}):\n" + "\n".join(sorted(batch_names)) +
+            "\n\n--- AI Mode answer ---\n\n" + answer_text,
+            encoding="utf-8",
+        )
+        logger.warning("Low-yield verification batch %s dumped to %s", label, path)
+    except Exception:
+        pass
 
 
 def _run_one_verify_batch(query: str, label: str) -> tuple[str, dict]:
@@ -461,6 +476,15 @@ def verify_and_classify_via_ai_mode(
                     continue
                 verdicts = _parse_verify_table(result.get("answer", ""), result.get("tables", []), batch_names)
                 logger.info("Batch %s: parsed %d verdicts for %d companies sent", label, len(verdicts), len(batch_names))
+                if len(verdicts) < len(batch_names) * 0.5:
+                    # A batch that returns far fewer verdicts than companies
+                    # sent has previously turned out to mean AI Mode judged
+                    # most as not relevant and stopped listing them rather
+                    # than following the "cover every company" instruction --
+                    # but that was only a guess, since nothing was captured to
+                    # check it against. Dumping the raw answer here means the
+                    # next low-yield batch is diagnosable from real evidence.
+                    _dump_low_yield_verify_answer(label, result.get("answer", ""), batch_names)
                 all_verdicts.update(verdicts)
 
     # AI Mode echoes a company name in its own preferred form, which often

@@ -168,6 +168,23 @@ def is_fragment_only_name(name: str) -> bool:
     return bool(_FRAGMENT_ONLY_NAME.match(name.strip()))
 
 
+# The literal example values used in our own JSON-schema prompt instructions
+# ("Full Company Name", the ACME placeholder). A real run showed AI Mode echo
+# these back verbatim as if they were a genuine discovered company when a
+# market was hard to find candidates for -- and once that happened, the
+# placeholder got added to the "already found" exclusion list and quoted back
+# into every subsequent query, making the problem self-perpetuating. Filtered
+# here as a hard backstop regardless of the exact wording used in any prompt.
+_OWN_PROMPT_PLACEHOLDER = re.compile(
+    r"^(?:full company name|hq country|acme example co|example corp|company name here|"
+    r"exact name as given)\b", re.IGNORECASE,
+)
+
+
+def is_own_prompt_placeholder(name: str) -> bool:
+    return bool(_OWN_PROMPT_PLACEHOLDER.match(name.strip()))
+
+
 def _trim_leading_noise(name: str) -> str:
     """Strip a previous entry's trailing fragment off the front of a captured
     name. Runs repeatedly because a split can leave more than one layer (e.g.
@@ -303,7 +320,7 @@ def _mentions_from_text(answer_text: str) -> list[AiModeCompanyMention]:
             continue
         if len(name) <= 3 and name.rstrip(".").isalpha():
             continue
-        if is_fragment_only_name(name):
+        if is_fragment_only_name(name) or is_own_prompt_placeholder(name):
             continue
         # An all-lowercase match is a fragment of a domain or description
         # ("coca" out of "coca-colacompany.com"), never an extracted
@@ -420,7 +437,7 @@ def _mentions_from_dash_domain_text(answer_text: str) -> list[AiModeCompanyMenti
             continue
         if len(name) <= 3 and name.rstrip(".").isalpha():
             continue
-        if is_fragment_only_name(name):
+        if is_fragment_only_name(name) or is_own_prompt_placeholder(name):
             continue
         # An all-lowercase match is a fragment of a domain or description
         # ("coca" out of "coca-colacompany.com"), never an extracted
@@ -479,7 +496,7 @@ def _mentions_from_bare_domain_paren(answer_text: str) -> list[AiModeCompanyMent
             continue
         if len(name) <= 3 and name.rstrip(".").isalpha():
             continue
-        if is_fragment_only_name(name):
+        if is_fragment_only_name(name) or is_own_prompt_placeholder(name):
             continue
         # An all-lowercase match is a fragment of a domain or description
         # ("coca" out of "coca-colacompany.com"), never an extracted

@@ -654,15 +654,37 @@ class GoogleAIModeScraper:
         self.log(f"CAPTCHA still present after {waited}s", "WARNING")
         return False
 
-    @staticmethod
-    def _answer_looks_complete(body_text: str) -> bool:
+    # The prompt itself contains a JSON schema example with realistic-looking
+    # braces and a "name" key (e.g. the ACME placeholder), and because the
+    # question is echoed onto the page before AI Mode has generated anything,
+    # a naive "is there a complete {...} block with a name field" check was
+    # satisfied by our OWN instructions -- causing the wait to exit instantly
+    # on a page that still showed "Transcribing..." with no real answer yet.
+    # Confirmed directly from a captured page dump. The schema markers are
+    # therefore excluded before checking for a genuine answer.
+    _PROMPT_JSON_MARKERS = ("ACME EXAMPLE CO", "exact name as given", "Full Company Name")
+
+    @classmethod
+    def _answer_looks_complete(cls, body_text: str) -> bool:
         """True when the page already holds a finished JSON answer -- at least
         one complete {...} object with a "name" field, and a closing bracket
-        after it. Used to stop waiting on a spinner that never clears."""
+        after it, that is NOT just our own echoed prompt/schema text. Used to
+        stop waiting on a spinner that never clears."""
         if '"name"' not in body_text:
             return False
-        last_obj_end = body_text.rfind("}")
-        return last_obj_end != -1 and "]" in body_text[last_obj_end:]
+        # Look for real answer content after the last occurrence of any of our
+        # own prompt markers, so an answer is only accepted once AI Mode's own
+        # generated text -- not the echoed question -- contains it.
+        search_from = 0
+        for marker in cls._PROMPT_JSON_MARKERS:
+            idx = body_text.rfind(marker)
+            if idx != -1:
+                search_from = max(search_from, idx + len(marker))
+        remainder = body_text[search_from:]
+        if '"name"' not in remainder:
+            return False
+        last_obj_end = remainder.rfind("}")
+        return last_obj_end != -1 and "]" in remainder[last_obj_end:]
 
     def _hit_rate_limit(self) -> bool:
         try:
@@ -671,7 +693,7 @@ class GoogleAIModeScraper:
             return False
         return any(marker in body_text for marker in self.RATE_LIMIT_MARKERS)
 
-    def _wait_for_generation_complete(self, max_wait=150, poll_interval=2, stable_checks=3):
+    def _wait_for_generation_complete(self, max_wait=150, poll_interval=3, stable_checks=6):
         """Poll the main content area's text length until it stops growing.
 
         AI Mode streams its answer in; for long/complex prompts (a detailed
