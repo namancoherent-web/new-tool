@@ -4,6 +4,7 @@ import logging
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -273,18 +274,39 @@ def _mention_to_enriched_candidate(mention, query: str, role_hint: str = "") -> 
     )
 
 
+# How long to back off after Google AI Mode's own rate-limit message,
+# before trying exactly once more. A fresh throwaway profile doesn't help
+# here (the limit is Google-side, not a local cookie/profile issue), so
+# the only real remedy is waiting -- this is a single retry, not a loop,
+# so a sustained rate limit still surfaces as "0 mentions" for this
+# attempt rather than blocking the whole round indefinitely.
+RATE_LIMIT_BACKOFF_SECONDS = 45
+
+
 def _run_one_attempt(query: str, attempt_label: str) -> tuple[str, list]:
     """Run a single AI Mode attempt in its own throwaway Chromium profile
     (deleted afterwards) so it can safely run concurrently with others
     without colliding on a shared --user-data-dir lock file."""
-    profile_dir = str(Path(tempfile.gettempdir()) / f"ai_mode_profile_{uuid.uuid4().hex[:8]}")
-    try:
-        mentions = google_ai_mode.search(
-            query, headless=CONFIG.google_ai_mode_headless, profile_dir=profile_dir
-        )
-        return attempt_label, mentions
-    finally:
-        shutil.rmtree(profile_dir, ignore_errors=True)
+    for retry in range(2):
+        profile_dir = str(Path(tempfile.gettempdir()) / f"ai_mode_profile_{uuid.uuid4().hex[:8]}")
+        try:
+            mentions = google_ai_mode.search(
+                query, headless=CONFIG.google_ai_mode_headless, profile_dir=profile_dir
+            )
+            return attempt_label, mentions
+        except google_ai_mode.RateLimitedError:
+            if retry == 0:
+                logger.warning(
+                    "%s hit Google's rate limit -- waiting %ds before one retry",
+                    attempt_label, RATE_LIMIT_BACKOFF_SECONDS,
+                )
+                time.sleep(RATE_LIMIT_BACKOFF_SECONDS)
+                continue
+            logger.warning("%s still rate-limited after backoff -- giving up on this attempt", attempt_label)
+            return attempt_label, []
+        finally:
+            shutil.rmtree(profile_dir, ignore_errors=True)
+    return attempt_label, []
 
 
 def discover_via_google_ai_mode(

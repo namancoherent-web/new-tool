@@ -372,6 +372,18 @@ class ChromiumNotFoundError(RuntimeError):
     to explain why."""
 
 
+class RateLimitedError(RuntimeError):
+    """Raised when Google AI Mode itself returns "You've reached the
+    request limit for AI responses. Try again in a little while." --
+    distinct from a normal search() failure. Unlike ChromiumNotFoundError
+    (which means every remaining attempt will fail identically, so the
+    whole discovery loop should stop immediately), a rate limit is
+    transient: the caller should back off for a while and then keep
+    trying, not abandon the run and not hammer Google again instantly
+    with a fresh profile (a fresh local Chromium profile doesn't bypass a
+    Google-side rate limit tied to the account/IP)."""
+
+
 def _chromium_missing() -> bool:
     from pathlib import Path as _Path
     expected = _Path.home() / "AppData" / "Local" / "Chromium" / "Application" / "chrome.exe"
@@ -422,6 +434,11 @@ def search(query: str, headless: bool = False, profile_dir: str | None = None) -
                 scraper.close()
             except Exception:
                 pass
+
+    if result.get("rate_limited"):
+        raise RateLimitedError(
+            "Google AI Mode returned its own request-limit message -- back off before retrying."
+        )
 
     if not result.get("success"):
         logger.warning("Google AI Mode returned no result for %r: %s", query, result.get("error"))

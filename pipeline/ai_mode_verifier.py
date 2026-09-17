@@ -6,6 +6,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -171,36 +172,54 @@ def _cell(cells: list[str], idx: int | None) -> str:
     return cells[idx].strip()
 
 
+# Same rationale as discovery's RATE_LIMIT_BACKOFF_SECONDS: a fresh local
+# profile doesn't bypass Google's own server-side rate limit, so the only
+# real remedy is waiting once before giving up on this batch.
+RATE_LIMIT_BACKOFF_SECONDS = 45
+
+
 def _run_one_verify_batch(query: str, label: str) -> tuple[str, dict]:
     """Run a single verification query in its own throwaway Chromium
     profile so batches can run concurrently without colliding on a shared
     --user-data-dir lock file, same pattern as discovery attempts."""
-    profile_dir = str(Path(tempfile.gettempdir()) / f"ai_mode_verify_profile_{uuid.uuid4().hex[:8]}")
-    try:
-        from google_ai_scraper import GoogleAIModeScraper
-        scraper = None
+    for retry in range(2):
+        profile_dir = str(Path(tempfile.gettempdir()) / f"ai_mode_verify_profile_{uuid.uuid4().hex[:8]}")
         try:
-            scraper = GoogleAIModeScraper(
-                headless=CONFIG.google_ai_mode_headless, verbose=False, profile_dir=profile_dir
-            )
-            result = scraper.ask_ai_mode(query)
-        finally:
-            if scraper:
-                try:
-                    scraper.close()
-                except Exception:
-                    pass
-        if not result.get("success"):
-            logger.warning("Verification batch %s failed: %s", label, result.get("error"))
+            from google_ai_scraper import GoogleAIModeScraper
+            scraper = None
+            try:
+                scraper = GoogleAIModeScraper(
+                    headless=CONFIG.google_ai_mode_headless, verbose=False, profile_dir=profile_dir
+                )
+                result = scraper.ask_ai_mode(query)
+            finally:
+                if scraper:
+                    try:
+                        scraper.close()
+                    except Exception:
+                        pass
+            if result.get("rate_limited"):
+                if retry == 0:
+                    logger.warning(
+                        "Verification batch %s hit Google's rate limit -- waiting %ds before one retry",
+                        label, RATE_LIMIT_BACKOFF_SECONDS,
+                    )
+                    time.sleep(RATE_LIMIT_BACKOFF_SECONDS)
+                    continue
+                logger.warning("Verification batch %s still rate-limited after backoff -- giving up", label)
+                return label, {}
+            if not result.get("success"):
+                logger.warning("Verification batch %s failed: %s", label, result.get("error"))
+                return label, {}
+            return label, {"answer": result.get("answer") or "", "tables": result.get("tables") or []}
+        except google_ai_mode.ChromiumNotFoundError:
+            raise
+        except Exception as e:
+            logger.warning("Verification batch %s errored: %s", label, e)
             return label, {}
-        return label, {"answer": result.get("answer") or "", "tables": result.get("tables") or []}
-    except google_ai_mode.ChromiumNotFoundError:
-        raise
-    except Exception as e:
-        logger.warning("Verification batch %s errored: %s", label, e)
-        return label, {}
-    finally:
-        shutil.rmtree(profile_dir, ignore_errors=True)
+        finally:
+            shutil.rmtree(profile_dir, ignore_errors=True)
+    return label, {}
 
 
 def verify_and_classify_via_ai_mode(

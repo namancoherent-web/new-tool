@@ -271,6 +271,19 @@ class GoogleAIModeScraper:
                 self._handle_cookies()
                 self._wait_for_generation_complete()
 
+                if self._hit_rate_limit():
+                    self.log("Google AI Mode rate limit hit -- returning immediately instead of parsing an empty answer", "WARNING")
+                    return {
+                        "question": question,
+                        "answer": None,
+                        "tables": [],
+                        "raw_html": None,
+                        "success": False,
+                        "error": "rate_limited",
+                        "rate_limited": True,
+                        "format": None,
+                    }
+
                 ai_response_html = self._extract_ai_response()
                 if ai_response_html:
                     full_text, answer_only, tables_md = self._clean_html_and_extract_answer(
@@ -449,6 +462,27 @@ class GoogleAIModeScraper:
         except Exception:
             pass
 
+    # Google's own rate-limit message when too many AI Mode requests come
+    # from the same account/IP/session pattern in a short window -- distinct
+    # from a normal empty/short answer. Confirmed to exist by direct manual
+    # testing. Detecting this explicitly matters because it needs different
+    # handling than a normal "0 mentions" attempt: retrying immediately
+    # with a fresh throwaway profile (the usual per-attempt behavior) won't
+    # help, since this is Google-side rate limiting, not a stale local
+    # cookie/profile issue -- the caller needs to back off for a while
+    # instead of burning through the remaining attempt budget instantly.
+    RATE_LIMIT_MARKERS = (
+        "reached the request limit for ai responses",
+        "try again in a little while",
+    )
+
+    def _hit_rate_limit(self) -> bool:
+        try:
+            body_text = self.driver.find_element(By.TAG_NAME, "body").text.lower()
+        except Exception:
+            return False
+        return any(marker in body_text for marker in self.RATE_LIMIT_MARKERS)
+
     def _wait_for_generation_complete(self, max_wait=150, poll_interval=3, stable_checks=6):
         """Poll the main content area's text length until it stops growing.
 
@@ -474,6 +508,10 @@ class GoogleAIModeScraper:
                 text_len = len(body_text)
             except Exception:
                 continue
+
+            if self._hit_rate_limit():
+                self.log("Google AI Mode rate limit hit -- stopping generation wait immediately", "WARNING")
+                return
 
             # "Transcribing..." (mic idle label, always present once the
             # input box has rendered) is NOT itself a signal -- but
