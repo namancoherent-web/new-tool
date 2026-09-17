@@ -339,7 +339,9 @@ def _run_one_attempt(query: str, attempt_label: str) -> tuple[str, list]:
 
 
 def discover_via_google_ai_mode(
-    mu: MarketUnderstanding, cancel_event: threading.Event | None = None
+    mu: MarketUnderstanding,
+    cancel_event: threading.Event | None = None,
+    already_found: list[str] | None = None,
 ) -> list[EnrichedCandidate]:
     """Send the user's brief (or a generated equivalent) to Google AI Mode,
     running attempts in rounds of PARALLEL_ATTEMPTS_PER_ROUND concurrent
@@ -361,7 +363,12 @@ def discover_via_google_ai_mode(
     if not CONFIG.google_ai_mode_enabled:
         return []
 
-    seen_names: set[str] = set()
+    # Names already collected by an earlier pass. They seed seen_names so this
+    # pass never returns them again, and they are fed into the retry queries'
+    # exclusion list so AI Mode is explicitly asked for different companies --
+    # without this, a second pass just re-returns the first pass's list.
+    prior_names = [n.strip() for n in (already_found or []) if n.strip()]
+    seen_names: set[str] = {n.lower() for n in prior_names}
     candidates: list[EnrichedCandidate] = []
     attempts_run = 0
     consecutive_zero_rounds = 0
@@ -383,7 +390,7 @@ def discover_via_google_ai_mode(
             # snapshot (since they run concurrently, none can see another's
             # results yet) -- duplicates across the round are still caught
             # by seen_names when merging results afterwards.
-            already_found = [c.name for c in candidates]
+            already_found = prior_names + [c.name for c in candidates]
 
             # Each entry is (query_text, role_hint) -- role_hint is empty for
             # the broad primary/retry queries, and set for the targeted
@@ -525,7 +532,7 @@ def discover_via_google_ai_mode(
                 and not (cancel_event is not None and cancel_event.is_set())
             ):
                 round_size = min(PARALLEL_ATTEMPTS_PER_ROUND, attempt_budget - attempts_run)
-                already_found = [c.name for c in candidates]
+                already_found = prior_names + [c.name for c in candidates]
                 query_plan = [
                     (build_retry_query(mu, attempts_run + i + 1, already_found), "")
                     for i in range(round_size)
