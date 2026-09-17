@@ -520,10 +520,26 @@ class GoogleAIModeScraper:
     # help, since this is Google-side rate limiting, not a stale local
     # cookie/profile issue -- the caller needs to back off for a while
     # instead of burning through the remaining attempt budget instantly.
+    # How many consecutive stable polls to require before accepting an answer
+    # whose "Thinking" indicator never cleared. At the default 3s poll this is
+    # ~45s of the text not changing, matching the observed behaviour where the
+    # answer is finished but the spinner stays up.
+    STUCK_SPINNER_CHECKS = 15
+
     RATE_LIMIT_MARKERS = (
         "reached the request limit for ai responses",
         "try again in a little while",
     )
+
+    @staticmethod
+    def _answer_looks_complete(body_text: str) -> bool:
+        """True when the page already holds a finished JSON answer -- at least
+        one complete {...} object with a "name" field, and a closing bracket
+        after it. Used to stop waiting on a spinner that never clears."""
+        if '"name"' not in body_text:
+            return False
+        last_obj_end = body_text.rfind("}")
+        return last_obj_end != -1 and "]" in body_text[last_obj_end:]
 
     def _hit_rate_limit(self) -> bool:
         try:
@@ -547,6 +563,7 @@ class GoogleAIModeScraper:
         self.log("Waiting for AI Mode response to finish generating...")
         last_len = -1
         stable_count = 0
+        stuck_stable_count = 0
         elapsed = 0.0
         while elapsed < max_wait:
             time.sleep(poll_interval)
@@ -570,6 +587,26 @@ class GoogleAIModeScraper:
             # stable (streaming can pause between chunks, e.g. during that
             # "thinking" phase before the real answer starts appearing).
             still_generating = "Thinking a little longer" in body_text or "Thinking..." in body_text
+
+            # The "Thinking a little longer" indicator sometimes stays on the
+            # page after the answer is fully rendered -- confirmed from a
+            # screenshot showing a complete JSON array sitting below a spinner
+            # that never cleared. Treating that as "still generating" meant
+            # waiting out the full max_wait on every such attempt, adding
+            # minutes per run for an answer already on screen. Once the text
+            # has stopped growing and a complete JSON array is present, the
+            # answer is usable regardless of the spinner.
+            if still_generating and text_len == last_len and text_len > 0:
+                stuck_stable_count += 1
+                if stuck_stable_count >= self.STUCK_SPINNER_CHECKS and self._answer_looks_complete(body_text):
+                    self.log(
+                        f"Answer is complete ({text_len} chars) but the 'Thinking' indicator is "
+                        f"still showing after {elapsed:.0f}s -- accepting the rendered answer",
+                        "WARNING",
+                    )
+                    return
+            else:
+                stuck_stable_count = 0
 
             if text_len == last_len and text_len > 0 and not still_generating:
                 stable_count += 1

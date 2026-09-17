@@ -12,13 +12,11 @@ from pipeline.ai_mode_verifier import verify_and_classify_via_ai_mode
 from pipeline.category_filter import apply_golden_rule
 from pipeline.crawler import enrich_candidates
 from pipeline.deduplicator import deduplicate
-from pipeline.deepseek_client import DeepSeekClient
-from pipeline.domain_verifier import verify_domains
 from pipeline.directory_miner import expand_via_directories, looks_like_directory
 from pipeline.engine_health import probe_engines
 from pipeline.exporter import export_all
 from pipeline.google_ai_mode_discovery import discover_via_google_ai_mode
-from pipeline.market_understanding import understand_market
+from pipeline.ai_mode_market_understanding import understand_market_via_ai_mode
 from pipeline.models import ClassifiedCompany, MarketUnderstanding
 from pipeline.prefilter import prefilter_candidates
 from pipeline.query_generator import base_queries, widen_queries
@@ -26,6 +24,15 @@ from pipeline.search_engine import run_search_queries
 from pipeline.verifier import verify_ai_mode_candidates, verify_candidates
 
 logger = logging.getLogger(__name__)
+
+# The run keeps discovering and verifying until this many RELEVANT companies
+# are found, rather than stopping at a discovered-candidate count -- a pass
+# that discovers 200 can still finish near 100 once verification rejects the
+# ones that do not genuinely belong. MAX_RELEVANT_PASSES caps the effort so a
+# genuinely narrow market (confirmed real: Google AI Mode itself only knows
+# ~60 Turkish porcelain companies) finishes instead of looping forever.
+RELEVANT_TARGET = 200
+MAX_RELEVANT_PASSES = 6
 
 
 @dataclass
@@ -107,12 +114,10 @@ def run_universe_search(
             report("Cancelled", "Run stopped by user")
             raise RunCancelled()
 
+    # Market understanding runs on Google AI Mode too, so the whole pipeline
+    # uses a single source and needs no paid API key.
     report("Understanding market", f"{market_name} / {geography} / {category_prompt}")
-    ds_client = DeepSeekClient()
-    try:
-        mu = understand_market(ds_client, market_name, geography, category_prompt, brief)
-    finally:
-        ds_client.close()
+    mu = understand_market_via_ai_mode(market_name, geography, category_prompt, brief)
     check_cancelled()
 
     ai_mode_only = CONFIG.google_ai_mode_enabled and CONFIG.google_ai_mode_only
@@ -214,45 +219,103 @@ def run_universe_search(
         report("Crawling websites", f"{len(candidates)} candidates")
         enriched = _run_async(enrich_candidates(candidates))
 
-    check_cancelled()
-    report("Verifying", f"{len(enriched)} enriched candidates")
-    if ai_mode_only:
-        verified = verify_ai_mode_candidates(enriched)
-    else:
-        verified = verify_candidates(enriched, mu)
-    verified_ok = [v for v in verified if not v.rejected]
-    total_verified = len(verified_ok)
-
-    check_cancelled()
-    report("Classifying", f"{total_verified} verified candidates (Google AI Mode)")
-    classified = verify_and_classify_via_ai_mode(verified_ok, mu, cancel_event=cancel_event)
-    check_cancelled()
-
+    # The target is 200 RELEVANT companies, not 200 discovered -- verification
+    # typically rejects a large share, so a single discovery pass that reaches
+    # 200 candidates can still finish far short. This loop keeps discovering
+    # and verifying until the relevant count reaches the target, the market is
+    # exhausted (a round adds nothing new), or the effort ceiling is hit so a
+    # narrow market can never hang the run.
     no_category_filter = _is_no_filter_prompt(category_prompt)
-    if no_category_filter:
-        report("Skipping category filter", "no specific role requested, keeping all relevant players")
-        kept = [c for c in classified if c.is_relevant]
-        dropped = [c for c in classified if not c.is_relevant]
-    else:
-        report("Applying category filter", f"target category: {category_prompt}")
-        kept, dropped = apply_golden_rule(classified, category_prompt)
+    kept: list[ClassifiedCompany] = []
+    dropped: list[ClassifiedCompany] = []
+    seen_candidate_names: set[str] = {c.name.lower().strip() for c in enriched}
+    total_verified = 0
+    pass_num = 0
+    barren_rounds = 0
 
-    # Rejected companies and their reasons were computed but never surfaced,
-    # which made it impossible to tell whether a large drop meant discovery
-    # was pulling in irrelevant companies (fixable in the discovery prompt)
-    # or verification was being too strict. Logging a sample of the actual
-    # reasons makes that visible without dumping every rejection.
-    if dropped:
-        logger.info("Verification rejected %d of %d companies -- sample reasons:", len(dropped), len(classified))
-        for c in dropped[:15]:
-            logger.info("  rejected %r: %s", c.company_name, (c.reason or "(no reason given)")[:160])
+    while True:
+        pass_num += 1
+        check_cancelled()
+        report("Verifying", f"{len(enriched)} enriched candidates (pass {pass_num})")
+        if ai_mode_only:
+            verified = verify_ai_mode_candidates(enriched)
+        else:
+            verified = verify_candidates(enriched, mu)
+        verified_ok = [v for v in verified if not v.rejected]
+        total_verified += len(verified_ok)
+
+        check_cancelled()
+        report("Classifying", f"{len(verified_ok)} verified candidates (Google AI Mode)")
+        classified = verify_and_classify_via_ai_mode(verified_ok, mu, cancel_event=cancel_event)
+        check_cancelled()
+
+        if no_category_filter:
+            pass_kept = [c for c in classified if c.is_relevant]
+            pass_dropped = [c for c in classified if not c.is_relevant]
+        else:
+            pass_kept, pass_dropped = apply_golden_rule(classified, category_prompt)
+
+        kept.extend(pass_kept)
+        dropped.extend(pass_dropped)
+
+        # Rejected companies and their reasons were computed but never
+        # surfaced, which made it impossible to tell whether a large drop
+        # meant discovery was pulling in irrelevant companies (fixable in the
+        # discovery prompt) or verification was being too strict.
+        if pass_dropped:
+            logger.info(
+                "Pass %d: verification rejected %d of %d -- sample reasons:",
+                pass_num, len(pass_dropped), len(classified),
+            )
+            for c in pass_dropped[:10]:
+                logger.info("  rejected %r: %s", c.company_name, (c.reason or "(no reason given)")[:160])
+
+        relevant_so_far = len(deduplicate(kept))
+        report(
+            "Relevant companies so far",
+            f"{relevant_so_far} (target {RELEVANT_TARGET}, pass {pass_num}/{MAX_RELEVANT_PASSES})",
+        )
+
+        if relevant_so_far >= RELEVANT_TARGET:
+            report("Target reached", f"{relevant_so_far} relevant companies")
+            break
+        if pass_num >= MAX_RELEVANT_PASSES:
+            report(
+                "Effort ceiling reached",
+                f"stopping after {pass_num} passes with {relevant_so_far} relevant companies",
+            )
+            break
+        if not ai_mode_only:
+            break
+
+        # Go find more, excluding everything already seen so the next pass
+        # cannot simply return the same companies again.
+        check_cancelled()
+        report("Below target", f"searching for more companies (pass {pass_num + 1})")
+        more = discover_via_google_ai_mode(
+            mu, cancel_event=cancel_event, already_found=sorted(seen_candidate_names)
+        )
+        fresh = [c for c in more if c.name.lower().strip() not in seen_candidate_names]
+        for c in fresh:
+            seen_candidate_names.add(c.name.lower().strip())
+
+        report("Additional discovery complete", f"{len(fresh)} new companies found")
+        if not fresh:
+            barren_rounds += 1
+            if barren_rounds >= 2:
+                report(
+                    "Market exhausted",
+                    f"no new companies in {barren_rounds} consecutive passes -- "
+                    f"stopping at {relevant_so_far} relevant companies",
+                )
+                break
+            continue
+        barren_rounds = 0
+        enriched = fresh
 
     report("Deduplicating", f"{len(kept)} companies before dedup")
     final_companies = deduplicate(kept)
     final_companies.sort(key=lambda c: (-c.confidence, c.company_name.lower()))
-
-    report("Verifying website domains", f"checking {sum(1 for c in final_companies if c.website)} claimed domains")
-    _run_async(verify_domains(final_companies))
 
     report("Exporting", f"{len(final_companies)} final companies")
     basename = f"{_slugify(market_name)}_{_slugify(geography)}_{_slugify(category_prompt)}"
