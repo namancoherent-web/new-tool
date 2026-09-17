@@ -376,13 +376,29 @@ def discover_via_google_ai_mode(
 
             # A near-empty round (all attempts in it combined added almost
             # nothing) is common transient flakiness in AI Mode's own
-            # response generation, confirmed by direct reproduction --
-            # only stop early after three rounds in a row come back
-            # empty/near-empty, so the attempt budget actually gets used
-            # instead of bailing on a short unlucky streak.
-            if new_this_round <= 2:
+            # response generation, confirmed by direct reproduction -- only
+            # stop early after enough consecutive near-empty rounds, so the
+            # attempt budget actually gets used instead of bailing on a
+            # short unlucky streak.
+            #
+            # Both the per-round "near empty" bar and the number of
+            # consecutive rounds tolerated need to scale with round_size.
+            # This was originally tuned as a flat "<=2 new companies, 3
+            # rounds in a row" back when rounds had 6 parallel attempts --
+            # a real flakiness signal at that width (2 of 6 attempts
+            # contributing anything). At the low-spec-laptop default of 2
+            # parallel browsers, the same flat "<=2 from 2 attempts, 3
+            # rounds" bar triggered almost immediately: confirmed directly
+            # as the cause of runs stopping at 50-60 companies after only 6
+            # of the 12 available attempts, despite the brief explicitly
+            # asking for 200+. Scaling both numbers down with round_size
+            # keeps the same total "wasted attempt" budget regardless of
+            # how many browsers run per round.
+            near_empty_threshold = max(1, round_size // 3)
+            rounds_before_stopping = max(3, -(-18 // round_size))  # ceil(18 / round_size), floor of 3
+            if new_this_round <= near_empty_threshold:
                 consecutive_zero_rounds += 1
-                if consecutive_zero_rounds >= 3:
+                if consecutive_zero_rounds >= rounds_before_stopping:
                     logger.warning(
                         "%d consecutive near-empty rounds -- stopping early",
                         consecutive_zero_rounds,
