@@ -316,9 +316,27 @@ class GoogleAIModeScraper:
                     + "&sourceid=chrome&ie=UTF-8&udm=50"
                 )
                 self.driver.get(url)
-                self.human_delay(4, 6)
+                # Short settle only. The generation wait that follows polls the
+                # page anyway, so a long fixed pause here just added dead time
+                # to every attempt without making anything more reliable.
+                self.human_delay(1.5, 2.5)
                 self._handle_cookies()
                 self._wait_for_generation_complete()
+
+                # Checked before the others: a CAPTCHA page has none of the
+                # normal answer content, so every downstream check would
+                # otherwise report a misleading "empty answer".
+                if self._hit_captcha() and not self._wait_out_captcha():
+                    return {
+                        "question": question,
+                        "answer": None,
+                        "tables": [],
+                        "raw_html": None,
+                        "success": False,
+                        "error": "captcha",
+                        "captcha": True,
+                        "format": None,
+                    }
 
                 if self._hit_rate_limit():
                     self.log("Google AI Mode rate limit hit -- returning immediately instead of parsing an empty answer", "WARNING")
@@ -330,6 +348,23 @@ class GoogleAIModeScraper:
                         "success": False,
                         "error": "rate_limited",
                         "rate_limited": True,
+                        "format": None,
+                    }
+
+                if self._generation_failed():
+                    self.log(
+                        "Google AI Mode reported it could not generate the content -- "
+                        "returning so the caller can retry with a clean profile",
+                        "WARNING",
+                    )
+                    return {
+                        "question": question,
+                        "answer": None,
+                        "tables": [],
+                        "raw_html": None,
+                        "success": False,
+                        "error": "generation_failed",
+                        "generation_failed": True,
                         "format": None,
                     }
 
@@ -352,14 +387,15 @@ class GoogleAIModeScraper:
 
             # Navigate directly to AI Mode page
             self.driver.get(self.AI_MODE_URL)
-            # INCREASED wait time for headless mode
-            self.human_delay(4, 6)
+            # Short settle -- the input-box lookup below already uses an
+            # explicit WebDriverWait, so a long fixed pause here was pure
+            # dead time on every attempt that takes this path (which is every
+            # attempt with a detailed brief, since those exceed the URL limit).
+            self.human_delay(1.5, 2.5)
 
             # Handle cookie consent
             self._handle_cookies()
-
-            # EXTENDED wait before looking for input
-            self.human_delay(2, 3)
+            self.human_delay(0.5, 1)
 
             # Find the "Ask anything" input box
             self.log("Looking for AI Mode input box...")
@@ -531,6 +567,93 @@ class GoogleAIModeScraper:
         "try again in a little while",
     )
 
+    # Google's own generation-failure message. Unlike a rate limit this is
+    # transient and not tied to the account or IP, so the right response is to
+    # retry promptly with a clean profile rather than back off. Previously it
+    # was not detected at all: the attempt returned an empty answer, counted as
+    # "0 companies found", and the slot was wasted.
+    GENERATION_FAILED_MARKERS = (
+        "something went wrong and the content wasn't generated",
+        "something went wrong and an ai response wasn't generated",
+        "something went wrong and the content wasn",
+    )
+
+    def _generation_failed(self) -> bool:
+        """Detect Google's generation-failure page.
+
+        Matching on exact wording proved unreliable -- a real run showed the
+        message on screen while this check never fired, because the rendered
+        text differs from the phrasing seen in the UI (line breaks, wording
+        variants such as "the content"/"an AI response", and surrounding chrome
+        all change the string). So the phrase list is matched loosely, on the
+        stable part of the sentence only, and the failing page is dumped so
+        the real text is available instead of guessed at."""
+        try:
+            body_text = self.driver.find_element(By.TAG_NAME, "body").text
+        except Exception:
+            return False
+
+        lowered = " ".join(body_text.lower().split())
+        failed = "something went wrong" in lowered and (
+            "generated" in lowered or "try again" in lowered
+        )
+        if failed:
+            self._dump_page("generation_failed", body_text)
+        return failed
+
+    def _dump_page(self, reason: str, body_text: str) -> None:
+        """Save a failing page so the actual rendered text can be inspected.
+        Detection that is guessed from a screenshot keeps missing; detection
+        built from a real dump does not."""
+        try:
+            out_dir = Path(__file__).resolve().parent / "logs" / "failure_dumps"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            path = out_dir / f"{int(time.time())}_{reason}.txt"
+            path.write_text(body_text, encoding="utf-8")
+            self.log(f"Saved failing page to {path}", "WARNING")
+        except Exception:
+            pass
+
+    # Google's bot-check wall. A fresh profile with no history is more likely
+    # to be challenged than a warmed-up one, so recycling profiles to dodge
+    # rate limits makes these more common, not less. The captcha-raptor
+    # extension is loaded and may solve it on its own, so detection waits a
+    # while before declaring failure rather than bailing immediately.
+    CAPTCHA_MARKERS = (
+        "our systems have detected unusual traffic",
+        "unusual traffic from your computer network",
+        "i'm not a robot",
+        "recaptcha",
+        "before you continue to google",
+        "verify it's you",
+        "verify you're not a robot",
+    )
+    CAPTCHA_SOLVE_WAIT_SECONDS = 45
+    CAPTCHA_POLL_SECONDS = 5
+
+    def _hit_captcha(self) -> bool:
+        try:
+            body_text = self.driver.find_element(By.TAG_NAME, "body").text.lower()
+        except Exception:
+            return False
+        return any(marker in body_text for marker in self.CAPTCHA_MARKERS)
+
+    def _wait_out_captcha(self) -> bool:
+        """Give the captcha-raptor extension a chance to solve a challenge.
+        Returns True if the page cleared, False if it is still blocked. The
+        caller then decides whether to retry -- a challenge that does not
+        clear is not something a further reset will fix on its own."""
+        self.log("CAPTCHA/bot check detected -- waiting for the solver extension", "WARNING")
+        waited = 0
+        while waited < self.CAPTCHA_SOLVE_WAIT_SECONDS:
+            time.sleep(self.CAPTCHA_POLL_SECONDS)
+            waited += self.CAPTCHA_POLL_SECONDS
+            if not self._hit_captcha():
+                self.log(f"CAPTCHA cleared after {waited}s")
+                return True
+        self.log(f"CAPTCHA still present after {waited}s", "WARNING")
+        return False
+
     @staticmethod
     def _answer_looks_complete(body_text: str) -> bool:
         """True when the page already holds a finished JSON answer -- at least
@@ -548,7 +671,7 @@ class GoogleAIModeScraper:
             return False
         return any(marker in body_text for marker in self.RATE_LIMIT_MARKERS)
 
-    def _wait_for_generation_complete(self, max_wait=150, poll_interval=3, stable_checks=6):
+    def _wait_for_generation_complete(self, max_wait=150, poll_interval=2, stable_checks=3):
         """Poll the main content area's text length until it stops growing.
 
         AI Mode streams its answer in; for long/complex prompts (a detailed
@@ -577,6 +700,31 @@ class GoogleAIModeScraper:
 
             if self._hit_rate_limit():
                 self.log("Google AI Mode rate limit hit -- stopping generation wait immediately", "WARNING")
+                return
+
+            # Bail out the moment Google says it failed, instead of waiting out
+            # the full max_wait. The failure message appears within seconds, so
+            # continuing to poll for it was costing up to 150s per failed
+            # attempt -- the single largest source of wasted time in a run.
+            lowered_body = " ".join(body_text.lower().split())
+            if "something went wrong" in lowered_body and (
+                "generated" in lowered_body or "try again" in lowered_body
+            ):
+                self.log(
+                    f"Google AI Mode reported a generation failure after {elapsed:.0f}s -- "
+                    f"stopping the wait so this attempt can be retried",
+                    "WARNING",
+                )
+                return
+
+            # We ask for a JSON array, which has an unambiguous end marker. If
+            # the array is closed and the text has stopped growing, the answer
+            # is finished -- there is nothing to gain from further stability
+            # polling. This is the main time saver: previously every single
+            # successful attempt paid 18s of confirmation waiting even though
+            # the answer was already complete on screen.
+            if text_len == last_len and text_len > 0 and self._answer_looks_complete(body_text):
+                self.log(f"Complete JSON answer detected after {elapsed:.0f}s -- not waiting further")
                 return
 
             # "Transcribing..." (mic idle label, always present once the
