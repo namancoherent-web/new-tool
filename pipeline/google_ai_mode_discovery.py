@@ -602,6 +602,22 @@ def discover_via_google_ai_mode(
                     new_this_attempt += 1
                 new_this_round += new_this_attempt
 
+                # Attempts in a round run concurrently and finish at
+                # different times (as_completed yields them as they land),
+                # so the target can be checked as soon as any single attempt
+                # crosses it -- rather than only between whole rounds, which
+                # let the total blow past the target by a full round's worth
+                # (confirmed directly: target 600, one round alone added
+                # 417, final total 778; target 400, one round added 473,
+                # final total 691). Attempts already in flight when this
+                # fires still finish normally -- there's no safe way to
+                # abort a live browser session mid-query -- but any attempt
+                # in this round that hasn't started yet is cancelled.
+                if len(candidates) >= MIN_TARGET_COMPANIES:
+                    for f in futures:
+                        f.cancel()
+                    break
+
             attempts_run += round_size
             logger.info(
                 "Round added %d new companies, running total: %d (target: %d+, %d/%d attempts used)",
