@@ -244,6 +244,15 @@ class GoogleAIModeScraper:
             element.send_keys(char)
             time.sleep(random.uniform(0.05, 0.15))
 
+    # Google's search URL silently fails to reach AI Mode once the q=
+    # parameter gets too long -- confirmed directly: a real verification
+    # query listing 40 companies (~2700+ chars before URL-encoding, ~3500+
+    # after) loaded a real page with "It looks like there's no response
+    # available for this search," not a JS error or timeout. Below this
+    # length the URL approach is reliable; above it, force the
+    # type-and-submit flow instead, since that has no such limit.
+    MAX_URL_QUERY_LENGTH = 1500
+
     def ask_ai_mode(self, question, use_url_query=True):
         """Ask question directly in Google AI Mode.
 
@@ -254,8 +263,18 @@ class GoogleAIModeScraper:
         the most fragile and slowest part of this flow, and the exact
         sequence that has hung waiting on WebDriverWait in testing.
         Falls back to the type-and-submit flow if the URL approach doesn't
-        yield a response.
+        yield a response, and is forced off entirely for long questions
+        (see MAX_URL_QUERY_LENGTH) since Google's own search URL silently
+        fails past a certain length instead of erroring clearly.
         """
+        if use_url_query and len(question) > self.MAX_URL_QUERY_LENGTH:
+            self.log(
+                f"Question is {len(question)} chars (over {self.MAX_URL_QUERY_LENGTH}) -- "
+                f"using type-and-submit instead of the URL query, which silently fails on long queries",
+                "WARNING",
+            )
+            use_url_query = False
+
         try:
             self.log(f"🤖 Asking AI Mode: '{question}'")
 
