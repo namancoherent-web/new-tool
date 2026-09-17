@@ -65,38 +65,76 @@ def _build_verify_query(mu: MarketUnderstanding, batch: list[VerifiedCandidate])
 _TABLE_ROW_PATTERN = re.compile(r"^\|(.+)\|$", re.MULTILINE)
 
 # A real company name cell should not start with a bare domain-suffix
-# fragment (leftover from the previous row's website getting merged in)
-# or with lowercase disclaimer prose (leftover from a footnote like "...
-# have been omitted as requested." bleeding into the next cell).
+# fragment (leftover from the previous row's website getting merged in,
+# e.g. "com Berry Global Inc.", "co.jp Rengo Co., Ltd.") or with lowercase
+# disclaimer prose (leftover from a footnote like "... have been omitted
+# as requested." bleeding into the next cell). This must stay narrow --
+# legal suffixes like "S.A. de C.V.", "U.S. Plastic Corp.", "GmbH & Co.
+# KG", "A.J. Plast..." are extremely common in real company names and
+# must never be flagged just for containing a period followed by more
+# text (confirmed directly: an earlier, broader version of this check
+# wrongly flagged real companies like "Treofan Germany GmbH & Co. KG" and
+# "U.S. Plastic Corp." as corrupted).
 _GARBAGE_NAME_PREFIX = re.compile(
-    r"^(com(\.[a-z]{2,3})?\b|have been|were omitted|as requested|and\s)", re.IGNORECASE
+    r"^(com(\.[a-z]{2,3})?\b|co\.[a-z]{2}\b|have been|were omitted|as requested|and\s)",
+    re.IGNORECASE,
 )
+# A leaked bare 2-letter country-code TLD prefix ("cn Sigma Plastics
+# Group", "kr Kolon Industries") must be checked case-sensitively --
+# genuine initials like "MF Art Ceramic" or "TC Transcontinental" would
+# also match a case-insensitive [a-z]{2}, wrongly flagging real names.
+_GARBAGE_TLD_PREFIX = re.compile(r"^[a-z]{2}\s[A-Z]")
+
+# Lowercase-first is treated as corrupted only when it also looks like a
+# leaked sentence fragment (multiple lowercase words) rather than a
+# legitimately lowercase-styled brand name ("ePac Flexible Packaging",
+# "vonco products") -- confirmed both those real names have a single
+# lowercase-leading word followed by title-case/normal words, so requiring
+# at least two consecutive lowercase words before flagging avoids treating
+# real (if unusually styled) names as garbage.
+_LOWERCASE_SENTENCE_FRAGMENT = re.compile(r"^[a-z]+\s+[a-z]+")
 
 
 def _looks_like_company_name(name: str) -> bool:
-    if _GARBAGE_NAME_PREFIX.match(name):
+    if _GARBAGE_NAME_PREFIX.match(name) or _GARBAGE_TLD_PREFIX.match(name):
         return False
-    # A cell that is itself a full sentence (a leaked description like
-    # "Porcelain and ceramic tile surfaces provider. Porcelona") is not a
-    # name either, even though it starts uppercase -- multiple words
-    # followed by a mid-string ". " (sentence boundary) is the signal.
-    if re.search(r"\.\s+\S", name):
-        return False
-    # A real name starts with an uppercase letter/digit, not a lowercase
-    # word (lowercase-first almost always means it's the tail of a
-    # sentence that leaked into the cell, not an actual company name).
-    return name[:1].isupper() or name[:1].isdigit()
+    if name[:1].isupper() or name[:1].isdigit():
+        return True
+    # Lowercase-first: only corrupted if it reads as a sentence fragment
+    # (two+ lowercase words in a row), not a single stylized lowercase
+    # brand-name word followed by normal capitalization.
+    return not _LOWERCASE_SENTENCE_FRAGMENT.match(name)
 
 
 def _recover_name_from_garbage(name: str) -> str:
     """A corrupted cell often still has the real company name as the tail
-    of the fragment, after either a sentence boundary ('have been omitted
-    as requested. Akgün Seramik' -> 'Akgün Seramik') or a leaked bare
-    domain-suffix prefix ('com.tr Karaca' -> 'Karaca'). Best-effort only."""
+    of the fragment, after a leaked bare domain-suffix prefix ('com.tr
+    Karaca' -> 'Karaca', 'com Berry Global Inc.' -> 'Berry Global Inc.')
+    or a disclaimer sentence boundary ('have been omitted as requested.
+    Akgün Seramik' -> 'Akgün Seramik'). Best-effort only."""
+    # First try stripping a leaked bare domain-suffix prefix -- this is
+    # the common case and must not require splitting on "." first, since
+    # the recovered name itself may legitimately contain more periods
+    # (e.g. "com Berry Global Inc." -> "Berry Global Inc."). Covers a
+    # bare "com"/"co.jp"-style leak as well as a bare 2-letter
+    # country-code TLD leak ("cn Sigma Plastics Group", "kr Kolon
+    # Industries, Inc.").
+    stripped = re.sub(
+        r"^(com(\.[a-z]{2,3})?|co\.[a-z]{2}|[a-z]{2}|and)\s+(?=[A-Z0-9])", "", name, flags=re.IGNORECASE
+    ).strip()
+    if stripped != name and stripped and (stripped[:1].isupper() or stripped[:1].isdigit()):
+        return stripped
+    # Otherwise assume a disclaimer-sentence boundary: take the tail after
+    # the last ". " and only accept it if that tail alone still looks like
+    # a company name (recursing into the same garbage-prefix check catches
+    # a domain-suffix leak stacked after the sentence boundary too).
     parts = re.split(r"[.]\s+", name)
     tail = parts[-1].strip() if parts else ""
-    tail = re.sub(r"^(com(\.[a-z]{2,3})?|and)\s+", "", tail, flags=re.IGNORECASE).strip()
-    return tail if tail and (tail[:1].isupper() or tail[:1].isdigit()) else ""
+    if tail and tail != name:
+        return _recover_name_from_garbage(tail) or (
+            tail if (tail[:1].isupper() or tail[:1].isdigit()) and _looks_like_company_name(tail) else ""
+        )
+    return ""
 
 
 def _parse_verify_table(answer_text: str, tables: list[str], batch_names: set[str]) -> dict[str, dict]:
@@ -147,7 +185,18 @@ def _parse_verify_table(answer_text: str, tables: list[str], batch_names: set[st
                 # sentence-ending period) instead of accepting garbage or
                 # silently losing the row.
                 recovered = _recover_name_from_garbage(name)
-                if recovered and recovered.lower() in batch_names:
+                if recovered:
+                    # Prefer an exact match against the batch's own
+                    # candidate names when there is one (most reliable),
+                    # but don't require it -- exact punctuation/suffix
+                    # differences between AI Mode's rendering and our
+                    # stored candidate name ("Berry Global" vs "Berry
+                    # Global Inc.") shouldn't cause a successful recovery
+                    # to be thrown away. Confirmed as a real cause of mass
+                    # verdict loss: a whole batch's names were all
+                    # prefixed with a leaked domain suffix, recovery
+                    # worked, but the exact-match requirement discarded
+                    # every single one anyway.
                     name = recovered
                 else:
                     logger.warning("Skipping malformed verification row (name cell looked corrupted): %r", name)
