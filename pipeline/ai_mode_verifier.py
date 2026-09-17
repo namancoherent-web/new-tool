@@ -149,46 +149,52 @@ def _recover_name_from_garbage(name: str) -> str:
     return ""
 
 
-_JSON_BLOCK = re.compile(r"```(?:json)?\s*(\[.*?\])\s*```", re.DOTALL | re.IGNORECASE)
-_BARE_JSON_ARRAY = re.compile(r"(\[\s*\{.*\}\s*\])", re.DOTALL)
+# Parsed object-by-object rather than as one array, for the same reason as
+# discovery: the scraper reads rendered DOM text, where code fences do not
+# survive and Google injects helper phrases ("Use code with caution.") into
+# the middle of a code block. A single injected phrase makes json.loads fail
+# for the whole array, which would discard every verdict in the batch and
+# mark all its companies not relevant.
+_JSON_OBJECT = re.compile(r"\{[^{}]*\}", re.DOTALL)
+_UI_NOISE = re.compile(
+    r"\b(?:Use code with caution\.?|Content may be inaccurate\.?|"
+    r"Was this helpful\??|Show (?:more|less)|Copy code)\s*",
+    re.IGNORECASE,
+)
 
 
 def _parse_verify_json(answer_text: str) -> dict[str, dict]:
-    """Read the JSON array of verdicts the verification prompt asks for.
+    """Read the JSON verdicts the verification prompt asks for.
     Preferred over the markdown-table path because the name field has an
     explicit boundary and cannot absorb a fragment of the previous row."""
-    blocks = [m.group(1) for m in _JSON_BLOCK.finditer(answer_text)]
-    if not blocks:
-        bare = _BARE_JSON_ARRAY.search(answer_text)
-        if bare:
-            blocks = [bare.group(1)]
+    cleaned = _UI_NOISE.sub("", answer_text)
 
     results: dict[str, dict] = {}
-    for block in blocks:
+    for match in _JSON_OBJECT.finditer(cleaned):
+        chunk = match.group(0)
+        if '"name"' not in chunk:
+            continue
         try:
-            rows = json.loads(block)
+            row = json.loads(chunk)
         except ValueError:
             continue
-        if not isinstance(rows, list):
+        if not isinstance(row, dict):
             continue
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            name = str(row.get("name") or "").strip()
-            if not name:
-                continue
-            relevant = row.get("is_relevant")
-            if isinstance(relevant, str):
-                relevant = relevant.strip().lower().startswith(("y", "t"))
-            results[name.lower()] = {
-                "company_name": name,
-                "is_relevant": bool(relevant),
-                "category": str(row.get("category") or "").strip() or "Other",
-                "brand_name": str(row.get("brand_name") or "").strip() or name,
-                "parent_or_independent": str(row.get("parent_or_independent") or "").strip() or "Independent",
-                "hq_country": str(row.get("country") or "").strip(),
-                "reason": str(row.get("reason") or "").strip(),
-            }
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        relevant = row.get("is_relevant")
+        if isinstance(relevant, str):
+            relevant = relevant.strip().lower().startswith(("y", "t"))
+        results[name.lower()] = {
+            "company_name": name,
+            "is_relevant": bool(relevant),
+            "category": str(row.get("category") or "").strip() or "Other",
+            "brand_name": str(row.get("brand_name") or "").strip() or name,
+            "parent_or_independent": str(row.get("parent_or_independent") or "").strip() or "Independent",
+            "hq_country": str(row.get("country") or "").strip(),
+            "reason": str(row.get("reason") or "").strip(),
+        }
     if results:
         logger.info("Parsed %d verdicts from AI Mode's JSON response", len(results))
     return results

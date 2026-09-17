@@ -499,10 +499,24 @@ def _mentions_from_bare_domain_paren(answer_text: str) -> list[AiModeCompanyMent
     return mentions
 
 
-# A JSON array of company objects, with or without a surrounding ```json
-# fence. The discovery prompt asks for exactly this shape.
-_JSON_BLOCK = re.compile(r"```(?:json)?\s*(\[.*?\])\s*```", re.DOTALL | re.IGNORECASE)
-_BARE_JSON_ARRAY = re.compile(r"(\[\s*\{.*\}\s*\])", re.DOTALL)
+# Individual JSON objects, found directly in the answer text. Deliberately
+# NOT anchored on a ```json fence: the scraper reads rendered DOM text, and
+# the fence markers do not survive that (the only ``` in a captured answer
+# was our own prompt echoed back by the page). Nor is the whole array parsed
+# as one unit -- Google's UI injects helper text such as "Use code with
+# caution." into the middle of the code block, which makes json.loads fail
+# for the entire array. Confirmed on a real 60k-char answer: it contained
+# 307 companies, one injected phrase broke the array parse, and every single
+# company was lost. Reading object-by-object salvages 303 of those 307.
+_JSON_OBJECT = re.compile(r"\{[^{}]*\}", re.DOTALL)
+
+# UI/helper phrases Google injects into rendered code blocks, stripped before
+# an object is parsed so they cannot corrupt the fields around them.
+_UI_NOISE = re.compile(
+    r"\b(?:Use code with caution\.?|Content may be inaccurate\.?|"
+    r"Was this helpful\??|Show (?:more|less)|Copy code)\s*",
+    re.IGNORECASE,
+)
 
 
 def _mentions_from_json(answer_text: str) -> list[AiModeCompanyMention]:
@@ -515,44 +529,43 @@ def _mentions_from_json(answer_text: str) -> list[AiModeCompanyMention]:
     produced candidate names like "com Berry Global Inc." and silently lost
     them during verification. AI Mode does not always honour the format, so
     the prose parsers remain as a fallback."""
-    blocks = [m.group(1) for m in _JSON_BLOCK.finditer(answer_text)]
-    if not blocks:
-        bare = _BARE_JSON_ARRAY.search(answer_text)
-        if bare:
-            blocks = [bare.group(1)]
+    cleaned = _UI_NOISE.sub("", answer_text)
 
-    mentions: list[AiModeCompanyMention] = []
-    for block in blocks:
+    rows: list[dict] = []
+    for match in _JSON_OBJECT.finditer(cleaned):
+        chunk = match.group(0)
+        if '"name"' not in chunk:
+            continue
         try:
-            rows = json.loads(block)
+            row = json.loads(chunk)
         except ValueError:
             continue
-        if not isinstance(rows, list):
+        if isinstance(row, dict):
+            rows.append(row)
+
+    mentions: list[AiModeCompanyMention] = []
+    for row in rows:
+        name = str(row.get("name") or "").strip()
+        if not name or len(name) > 120 or is_fragment_only_name(name):
             continue
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            name = str(row.get("name") or "").strip()
-            if not name or len(name) > 120 or is_fragment_only_name(name):
-                continue
 
-            domain = ""
-            raw_site = str(row.get("website") or "").strip()
-            if raw_site:
-                candidate_domain = extract_domain(
-                    raw_site if raw_site.startswith("http") else "https://" + raw_site
-                )
-                if candidate_domain and not is_junk_domain(candidate_domain):
-                    domain = candidate_domain
-
-            mentions.append(
-                AiModeCompanyMention(
-                    name=name,
-                    hq_country=str(row.get("country") or "").strip(),
-                    products=str(row.get("products") or "").strip(),
-                    domain=domain,
-                )
+        domain = ""
+        raw_site = str(row.get("website") or "").strip()
+        if raw_site:
+            candidate_domain = extract_domain(
+                raw_site if raw_site.startswith("http") else "https://" + raw_site
             )
+            if candidate_domain and not is_junk_domain(candidate_domain):
+                domain = candidate_domain
+
+        mentions.append(
+            AiModeCompanyMention(
+                name=name,
+                hq_country=str(row.get("country") or "").strip(),
+                products=str(row.get("products") or "").strip(),
+                domain=domain,
+            )
+        )
     if mentions:
         logger.info("Parsed %d companies from AI Mode's JSON response", len(mentions))
     return mentions
