@@ -45,10 +45,11 @@ class Config:
     # and verification. Each one is a full browser process -- on a low-spec
     # laptop (e.g. an older i3 with 8GB RAM, the actual hardware this tool
     # is distributed on) too many at once makes the whole machine unusable
-    # while a run is in progress, not just slow. Defaults to 2 as a safe
-    # baseline; raise it in .env on a faster machine for quicker runs.
+    # while a run is in progress, not just slow. Defaults to 3; lower to 2
+    # in .env if that machine struggles, or raise it on a faster machine
+    # for quicker runs.
     google_ai_mode_max_parallel_browsers: int = field(
-        default_factory=lambda: _int("GOOGLE_AI_MODE_MAX_PARALLEL_BROWSERS", 2)
+        default_factory=lambda: _int("GOOGLE_AI_MODE_MAX_PARALLEL_BROWSERS", 3)
     )
 
     max_concurrent_crawls: int = field(default_factory=lambda: _int("MAX_CONCURRENT_CRAWLS", 10))

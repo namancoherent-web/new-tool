@@ -113,7 +113,13 @@ ACCURACY_SUFFIX = (
     # titles ("Dr. Reddy's Laboratories") made the text parser produce
     # corrupted names. With JSON the name field is the name.
     "Reply with ONLY a JSON array, no other text:\n"
-    '[{"name":"Full Company Name","country":"HQ country","website":"domain.com","products":"what it makes"}]\n'
+    # An obviously-fake placeholder name is used here on purpose. A real run
+    # showed AI Mode echoing "Full Company Name" back as if it were an actual
+    # discovered company when the market was hard to find candidates for --
+    # a schema example with realistic-looking field values gets treated as
+    # real data under exactly those conditions.
+    '[{"name":"ACME EXAMPLE CO (do not output this exact name)","country":"HQ country",'
+    '"website":"domain.com","products":"what it makes"}]\n'
     "Use \"\" for anything you are unsure of -- never guess a website."
 )
 
@@ -310,10 +316,13 @@ def build_retry_query(mu: MarketUnderstanding, attempt: int, already_found: list
     # meant to improve results was in fact the main cause of failed attempts.
     # The most recently found names are the ones AI Mode is most likely to
     # repeat, so those are the ones worth sending.
+    # "Already found" as a standalone lead-in phrase was itself picked up as a
+    # company name in a real run once -- reworded so the exclusion list can
+    # never be mistaken for the start of an entry list.
     recent = already_found[-EXCLUSION_LIST_MAX_NAMES:]
     exclusion_note = (
-        f"\n\nAlready found ({len(already_found)} total) -- give DIFFERENT companies, "
-        f"including smaller and lesser-known ones:\n{', '.join(recent)}"
+        f"\n\nDo NOT include any of these {len(already_found)} companies (already found): "
+        f"{', '.join(recent)}.\nFind DIFFERENT companies, including smaller and lesser-known ones."
     )
     if attempt >= 3:
         exclusion_note += (
