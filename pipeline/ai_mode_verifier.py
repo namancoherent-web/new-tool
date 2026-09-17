@@ -31,47 +31,34 @@ logger = logging.getLogger(__name__)
 VERIFY_BATCH_SIZE = 40
 PARALLEL_VERIFY_BATCHES = CONFIG.google_ai_mode_max_parallel_browsers
 
+# Kept short on purpose. A 40-company batch previously produced a ~4200
+# character query, and Google AI Mode answers "Something went wrong and the
+# content wasn't generated" on inputs that large -- so an over-long
+# verification prompt was itself causing batches to fail and their companies
+# to be dropped as unverified. The old prompt also described a markdown table
+# AND a JSON array; only JSON is requested now (table parsing survives purely
+# as a fallback), which removes a large block of redundant instructions.
 ACCURACY_PREFIX = (
-    "You are verifying a list of companies that were already discovered as candidates "
-    "for a specific market. For each company below, use your own real knowledge to judge "
-    "whether it genuinely, verifiably belongs in this market -- do not assume a company "
-    "belongs just because its name was given to you. If you are not confident a company "
-    "is real or relevant, mark it as not relevant rather than guessing.\n\n"
+    "Judge each company below from your own knowledge -- do not assume it belongs just "
+    "because it is listed. If unsure it is real or relevant, mark it not relevant.\n\n"
 )
 
 
 def _build_verify_query(mu: MarketUnderstanding, batch: list[VerifiedCandidate]) -> str:
-    company_lines = "\n".join(f"- {c.name}" + (f" ({c.domain})" if c.domain else "") for c in batch)
+    company_lines = "\n".join(f"- {c.name}" for c in batch)
     scope_section = mu.brief.strip() if mu.brief.strip() else (
-        f"Market: {mu.market_name} ({mu.geography}). "
-        f"Definition: {mu.definition or 'not specified'}. "
-        f"Out-of-scope types: {', '.join(mu.boundary.out_of_scope) if mu.boundary and mu.boundary.out_of_scope else 'none specified'}."
+        f"{mu.market_name} ({mu.geography}). {mu.definition or ''}".strip()
     )
     return (
         f"{ACCURACY_PREFIX}"
-        f"Market scope and rules:\n\"\"\"\n{scope_section}\n\"\"\"\n\n"
-        f"Companies to verify:\n{company_lines}\n\n"
-        f"For EVERY company listed above, respond as a table with exactly these columns: "
-        f"Company Name, Is Relevant (yes/no), Category (one of: Manufacturer, Parent Company, "
-        f"Distributor, Supplier, Technology Provider, Brand, Retailer, Investor, Service Provider, Other), "
-        f"Brand Name (the product brand if different from the company name, else repeat the company name), "
-        f"Parent Or Independent (Independent, or \"Subsidiary of X\" naming the real parent if you know one, "
-        f"or \"Parent Company\" if this company IS a parent to others), HQ Country, Reason (one sentence "
-        f"citing why it is or is not relevant, and what specifically it makes/does).\n\n"
-        f"Cover every single company listed above, in the same order -- do not skip any, even to mark "
-        f"them not relevant. Do not add companies that were not in the list.\n\n"
-        # Same reasoning as the discovery prompt: a JSON array has explicit
-        # field boundaries, so a verdict's company name cannot pick up a
-        # fragment of the previous row (the markdown-table path produced
-        # names like "com Berry Global Inc." and "have been omitted as
-        # requested. Akgun Seramik", which then failed to match the
-        # candidate they belonged to and were dropped as not relevant).
-        # Table parsing stays as a fallback for answers that ignore this.
-        f"Return the answer as a single JSON array inside a ```json code block, one object per "
-        f"company, with exactly these keys: \"name\" (copy the company name exactly as given "
-        f"above), \"is_relevant\" (true or false), \"category\", \"brand_name\", "
-        f"\"parent_or_independent\", \"country\", \"reason\". Output only the JSON array, with "
-        f"no commentary before or after it."
+        f"Market:\n\"\"\"\n{scope_section}\n\"\"\"\n\n"
+        f"Companies:\n{company_lines}\n\n"
+        f"Cover every company above, none extra. Reply with ONLY a JSON array:\n"
+        '[{"name":"exact name as given","is_relevant":true,"category":"Manufacturer",'
+        '"brand_name":"","parent_or_independent":"Independent","country":"","reason":"one sentence"}]\n'
+        "category: Manufacturer, Parent Company, Distributor, Supplier, Technology Provider, "
+        "Brand, Retailer, Investor, Service Provider or Other. "
+        'parent_or_independent: "Independent", "Subsidiary of X", or "Parent Company".'
     )
 
 
@@ -355,6 +342,23 @@ def _run_one_verify_batch(query: str, label: str) -> tuple[str, dict]:
                         scraper.close()
                     except Exception:
                         pass
+            if result.get("generation_failed"):
+                # Transient Google-side generation failure. Each attempt below
+                # builds a brand-new throwaway profile, so simply retrying
+                # gives it clean cookies and state.
+                if retry < VERIFY_ATTEMPTS - 1:
+                    logger.warning(
+                        "Verification batch %s: AI Mode failed to generate content -- "
+                        "retrying with a clean profile", label,
+                    )
+                    time.sleep(TRANSIENT_RETRY_SECONDS)
+                    continue
+                logger.warning(
+                    "Verification batch %s: AI Mode failed to generate content after %d attempts",
+                    label, VERIFY_ATTEMPTS,
+                )
+                return label, {}
+
             if result.get("rate_limited"):
                 if retry < VERIFY_ATTEMPTS - 1:
                     logger.warning(
@@ -379,6 +383,12 @@ def _run_one_verify_batch(query: str, label: str) -> tuple[str, dict]:
             return label, {"answer": result.get("answer") or "", "tables": result.get("tables") or []}
         except google_ai_mode.ChromiumNotFoundError:
             raise
+        except google_ai_mode.CaptchaBlockedError:
+            # Retrying a bot check with yet another fresh profile tends to
+            # make it worse -- a brand-new profile is exactly what Google
+            # challenges -- so this batch is abandoned rather than recycled.
+            logger.warning("Verification batch %s: bot check could not be cleared -- abandoning", label)
+            return label, {}
         except Exception as e:
             # A transient Selenium/browser fault ("element not interactable",
             # a stale element, a renderer crash) must not permanently lose the

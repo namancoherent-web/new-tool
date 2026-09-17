@@ -30,12 +30,14 @@ logger = logging.getLogger(__name__)
 # GOOGLE_AI_MODE_MAX_PARALLEL_BROWSERS in .env on a faster machine.
 PARALLEL_ATTEMPTS_PER_ROUND = CONFIG.google_ai_mode_max_parallel_browsers
 
-# Every run targets at least this many companies internally, regardless of
-# what count (if any) the user's own prompt/brief asks for -- confirmed
-# explicit requirement: a user brief asking for 40, 100, or 200 should still
-# have the pipeline aim for 200+ candidates before classification narrows
-# it down to whatever's actually real and verifiable.
-MIN_TARGET_COMPANIES = 200
+# How many candidates discovery collects before it stops. Deliberately far
+# above the 200 RELEVANT companies a run aims to deliver, because
+# verification rejects a large share of what discovery finds: measured
+# across real runs roughly 40% survive (232 discovered -> 91 relevant;
+# 283 -> 131). Stopping discovery at 200 therefore guaranteed a final
+# result near 100. Collecting ~600 means one pass clears the target at the
+# observed survival rate, instead of needing extra discover/verify passes.
+MIN_TARGET_COMPANIES = 600
 
 # If AI Mode queries haven't reached the target company count, retry up to
 # this many total attempts (run in parallel rounds of
@@ -46,13 +48,13 @@ MIN_TARGET_COMPANIES = 200
 # different attempts even with no code change (confirmed by direct
 # reproduction) -- so more independent attempts per unit of wall-clock time
 # is the most reliable lever against that variance.
-MAX_DISCOVERY_ATTEMPTS = 12
+MAX_DISCOVERY_ATTEMPTS = 24
 
 # Some markets are genuinely narrow (e.g. "Porcelain Market in Turkey" --
 # confirmed by direct manual testing that Google AI Mode itself, asked the
 # exact same question with no automation involved, only produces ~60
 # distinctly-named companies before running out of ones it's confident are
-# real). MIN_TARGET_COMPANIES (200) is aspirational for broad markets, but
+# real). MIN_TARGET_COMPANIES is aspirational for broad markets, but
 # a niche market finishing under this floor after the normal attempt
 # budget should get extra widened rounds rather than being accepted as
 # final -- confirmed directly that explicitly asking AI Mode to widen into
@@ -63,6 +65,14 @@ MAX_DISCOVERY_ATTEMPTS = 12
 # will go so a truly tiny market doesn't burn attempts forever.
 NICHE_MARKET_FLOOR = 90
 MAX_EXTRA_NICHE_ATTEMPTS = 10
+
+# Hard cap on how many already-found company names are listed back to AI Mode
+# in a retry query. This is a reliability limit, not a quality one: at 60
+# names a retry query reached ~5000 characters, and Google AI Mode responds
+# "Something went wrong and the content wasn't generated" to inputs that
+# large. Keeping the prompt small is what stops that error, and the most
+# recent names are the ones AI Mode is most likely to repeat anyway.
+EXCLUSION_LIST_MAX_NAMES = 25
 
 TABLE_FORMAT_HINT = (
     "as a table with columns: Company Name, Headquarter Country, Core Products/Brands, "
@@ -78,54 +88,33 @@ TABLE_FORMAT_HINT = (
 # "smaller regional player" tail of the response where AI Mode has the least
 # grounding. Every candidate still goes through DeepSeek classification
 # afterwards, but garbage caught here never has to be classified at all.
+# Kept deliberately short. An over-long prompt is itself a failure mode:
+# Google AI Mode answers "Something went wrong and the content wasn't
+# generated" on very large inputs, and the wrapper plus a 60-name exclusion
+# list had pushed retry queries to ~5000 characters, which is what made that
+# error appear repeatedly. Every rule below still earns its place -- they are
+# just stated once, briefly, instead of at length.
 ACCURACY_PREFIX = (
-    "Answer using only real, verifiable, currently operating companies that you have "
-    "specific knowledge of -- do not invent, guess, or extrapolate plausible-sounding "
-    "company names to pad the list toward any target count. If you are not confident a "
-    "company genuinely exists and matches the request, leave it out rather than include it. "
-    "It is far better to return a shorter list of companies you are confident are real than "
-    "a longer list that includes uncertain or fabricated entries.\n\n"
+    "List only real, currently operating companies you actually know. "
+    "Never invent names to reach a count -- a shorter true list beats a padded one.\n\n"
 )
 
 ACCURACY_SUFFIX = (
-    "\n\nBefore finalizing your answer, silently double check every company you are about to "
-    "list: are you certain it is a real, currently operating company, and does it specifically "
-    "and verifiably match the product/category described above (not just a related or "
-    "similarly-named industry)? Drop any entry you are not confident about rather than include "
-    "it. Do not pad the list to reach any particular count -- accuracy matters more than "
-    "quantity.\n\n"
-    # Discovery previously used a looser relevance bar than the verification
-    # step that follows it, so it surfaced companies that were then rejected:
-    # a real run discovered 283 companies and verification threw out 152 of
-    # them. Stating the same test here means the companies that come back
-    # are the ones that will survive, instead of being found twice and
-    # discarded once.
-    "Apply this test to each company before including it: does this company itself actually "
-    "make, supply, or sell the specific product described above as a real part of its business? "
-    "Exclude companies that only operate in a broader or adjacent industry, that merely use or "
-    "buy this product rather than provide it, that supply machinery or equipment for making it "
-    "unless the request asks for equipment makers, and parent conglomerates whose connection is "
-    "only through an unrelated division. If the company does not clearly pass that test, leave "
-    "it out.\n\n"
-    # Asking for JSON removes the need to guess where one company ends and
-    # the next begins. AI Mode's prose answers arrive as one continuous
-    # string with no line breaks, so the text parser had to infer entry
-    # boundaries from punctuation -- and periods appear inside domains
-    # ("amcor.com"), corporate suffixes ("Henkel AG & Co. KGaA") and titles
-    # ("Dr. Reddy's Laboratories") just as they do at the end of a sentence.
-    # That produced corrupted candidate names ("com Berry Global Inc.",
-    # "KGaA"), which then failed to match their verdict during verification
-    # and were silently dropped as not relevant. With JSON there is no
-    # boundary to infer: the name field is the name. The prose parsers stay
-    # in place as a fallback for when AI Mode ignores this instruction,
-    # which it sometimes does.
-    "Return your answer as a single JSON array inside a ```json code block, with one object "
-    "per company and exactly these keys: \"name\" (the full official company name), "
-    "\"country\" (headquarters country, or \"\" if unsure), \"website\" (official domain such "
-    "as company.com, or \"\" if you are not confident), \"products\" (a short phrase describing "
-    "what it makes or does in this market). Output only the JSON array -- no commentary before "
-    "or after it. Never guess a website: an empty string is correct when unsure, a wrong domain "
-    "is not."
+    # The relevance test matters: discovery previously used a looser bar than
+    # the verification step that follows it, so a real run discovered 283
+    # companies and verification threw out 152. Stating the same test here
+    # means the companies that come back are the ones that will survive.
+    "\n\nInclude a company only if it itself makes, supplies or sells this exact product as a "
+    "real part of its business. Exclude adjacent industries, buyers/users of the product, "
+    "machinery and equipment makers, and conglomerates linked only via an unrelated division.\n\n"
+    # JSON removes the need to guess where one company ends and the next
+    # begins: AI Mode's prose arrives as one unbroken string, and periods
+    # inside domains ("amcor.com"), suffixes ("Henkel AG & Co. KGaA") and
+    # titles ("Dr. Reddy's Laboratories") made the text parser produce
+    # corrupted names. With JSON the name field is the name.
+    "Reply with ONLY a JSON array, no other text:\n"
+    '[{"name":"Full Company Name","country":"HQ country","website":"domain.com","products":"what it makes"}]\n'
+    "Use \"\" for anything you are unsure of -- never guess a website."
 )
 
 
@@ -134,6 +123,84 @@ def _category_hint(category_prompt: str) -> str:
     if normalized in {"", "all", "all players", "all relevant players", "all companies", "players", "companies"}:
         return "Include all company types: manufacturers, brand owners, suppliers, and distributors."
     return f"Focus specifically on companies that are {category_prompt}."
+
+
+# Longest brief that is sent to AI Mode untouched. Real user briefs can be
+# very long -- a detailed market-scope brief with full segmentation ran to
+# ~4900 characters, which pushed the finished query past 5600 and the retry
+# query past 6800. Google AI Mode answers "Something went wrong and the
+# content wasn't generated" at that size, so an over-long brief silently
+# broke every attempt in the run. Briefs under this limit are never altered.
+MAX_BRIEF_CHARS = 3200
+
+# Section headings whose contents are enumeration rather than instruction.
+# When a brief has to be shortened these go first: a segmentation matrix
+# ("By Form: Powder, Liquid, ...") tells AI Mode far less about WHICH
+# companies to find than the inclusion/exclusion rules do.
+_DROPPABLE_SECTION_PREFIXES = (
+    "by solution type", "by sugar-reduction level", "by form", "by application",
+    "by end user", "by distribution channel", "by product type", "by price range",
+    "by material grade", "by type", "by segment", "by category", "by channel",
+)
+
+
+def _fit_brief(brief: str) -> str:
+    """Shorten an over-long brief while keeping the parts that actually steer
+    which companies come back.
+
+    Order of removal: segmentation/enumeration sections first, then a hard
+    truncation as a last resort. The selection and exclusion rules are what
+    make results relevant, so they are preserved for as long as possible."""
+    if len(brief) <= MAX_BRIEF_CHARS:
+        return brief
+
+    lines = brief.splitlines()
+    kept: list[str] = []
+    dropping = False
+    for line in lines:
+        stripped = line.strip().lower()
+        if any(stripped.startswith(p) for p in _DROPPABLE_SECTION_PREFIXES):
+            dropping = True
+            continue
+        # A new non-list heading ends the dropped section. List items under a
+        # segmentation heading are short and unpunctuated, so anything longer
+        # or sentence-like is treated as the start of real instruction again.
+        if dropping and (len(stripped) > 60 or stripped.endswith((":", ".")) or stripped.startswith("-")):
+            dropping = False
+        if not dropping:
+            kept.append(line)
+
+    trimmed = "\n".join(kept).strip()
+
+    # Still too long: drop whole sections in order of least value to company
+    # discovery. A blunt tail-truncation was tried first and was wrong -- it
+    # cut the independence and no-duplicate rules, which are exactly the
+    # rules that keep the final list clean.
+    if len(trimmed) > MAX_BRIEF_CHARS:
+        for heading in ("final validation", "player selection criteria", "north america relevance"):
+            out, dropping_section = [], False
+            for line in trimmed.splitlines():
+                low = line.strip().lower()
+                if low.startswith(heading):
+                    dropping_section = True
+                    continue
+                if dropping_section and low and not low.startswith(("-", "•")) and len(low) < 45 and low[:1].isupper():
+                    dropping_section = False
+                if not dropping_section:
+                    out.append(line)
+            trimmed = "\n".join(out).strip()
+            if len(trimmed) <= MAX_BRIEF_CHARS:
+                break
+
+    if len(trimmed) > MAX_BRIEF_CHARS:
+        trimmed = trimmed[:MAX_BRIEF_CHARS].rsplit("\n", 1)[0].strip()
+
+    logger.warning(
+        "Brief shortened from %d to %d chars to stay under the size Google AI Mode "
+        "reliably accepts. Selection and exclusion rules are preserved first.",
+        len(brief), len(trimmed),
+    )
+    return trimmed
 
 
 def build_primary_query(mu: MarketUnderstanding) -> str:
@@ -147,7 +214,7 @@ def build_primary_query(mu: MarketUnderstanding) -> str:
     but a brief that forgets to should still push for real breadth rather
     than default to a short illustrative list)."""
     if mu.brief.strip():
-        brief_text = mu.brief.strip() + (
+        brief_text = _fit_brief(mu.brief.strip()) + (
             f"\n\nIf the above does not already specify a target number of companies, "
             f"aim for at least {MIN_TARGET_COMPANIES} real, verifiable companies rather "
             f"than a short illustrative list."
@@ -236,21 +303,23 @@ def build_retry_query(mu: MarketUnderstanding, attempt: int, already_found: list
     base = build_primary_query(mu)
     if not already_found:
         return base
+
+    # The exclusion list is capped hard. Listing 60 names pushed retry queries
+    # to ~5000 characters, and Google AI Mode answers "Something went wrong and
+    # the content wasn't generated" on inputs that large -- the exclusion list
+    # meant to improve results was in fact the main cause of failed attempts.
+    # The most recently found names are the ones AI Mode is most likely to
+    # repeat, so those are the ones worth sending.
+    recent = already_found[-EXCLUSION_LIST_MAX_NAMES:]
     exclusion_note = (
-        f"\n\nDo not repeat any of these {len(already_found)} companies already identified: "
-        f"{', '.join(already_found[:60])}"
-        f"{'...' if len(already_found) > 60 else ''}. "
-        f"Find additional real companies not on this list, including smaller regional and "
-        f"lesser-known players."
+        f"\n\nAlready found ({len(already_found)} total) -- give DIFFERENT companies, "
+        f"including smaller and lesser-known ones:\n{', '.join(recent)}"
     )
     if attempt >= 3:
         exclusion_note += (
-            " The primary list above may already cover the best-known manufacturers and brand "
-            "owners -- to find more real companies, widen into the broader supply chain and "
-            "adjacent tiers: raw material and mineral processors/suppliers, component suppliers, "
-            "industrial glaze/frit/chemical developers, private-label and tier-2 regional "
-            "producers, and trade houses/wholesalers/distributors serving this market. Only "
-            "include ones you are confident genuinely operate in or supply this specific market."
+            "\n\nThe obvious market leaders are likely covered. Widen into the supply chain: "
+            "raw material and component suppliers, tier-2 and regional producers, private-label "
+            "makers, and distributors -- only ones genuinely active in this market."
         )
     return base + exclusion_note
 
@@ -312,19 +381,54 @@ def _mention_to_enriched_candidate(mention, query: str, role_hint: str = "") -> 
 RATE_LIMIT_BACKOFF_SECONDS = 45
 
 
+# "Something went wrong and the content wasn't generated" is transient and
+# not account- or IP-bound, so unlike a rate limit it is worth retrying
+# immediately rather than backing off. Each retry builds a brand-new
+# throwaway profile below, so the retry always starts from clean cookies
+# and state. Observed repeatedly in real runs; previously undetected, which
+# silently wasted the attempt.
+GENERATION_FAILED_ATTEMPTS = 3
+GENERATION_FAILED_PAUSE_SECONDS = 5
+
+# Any other AI Mode failure (timeout, stale element, renderer crash, blank
+# page) also gets a clean-profile retry rather than silently costing the
+# attempt. Each retry builds a new throwaway profile, so state is always
+# fresh.
+OTHER_ERROR_ATTEMPTS = 3
+
+
 def _run_one_attempt(query: str, attempt_label: str) -> tuple[str, list]:
     """Run a single AI Mode attempt in its own throwaway Chromium profile
     (deleted afterwards) so it can safely run concurrently with others
     without colliding on a shared --user-data-dir lock file."""
-    for retry in range(2):
+    rate_limit_retry_used = False
+    generation_failures = 0
+    other_failures = 0
+
+    while True:
         profile_dir = str(Path(tempfile.gettempdir()) / f"ai_mode_profile_{uuid.uuid4().hex[:8]}")
         try:
             mentions = google_ai_mode.search(
                 query, headless=CONFIG.google_ai_mode_headless, profile_dir=profile_dir
             )
             return attempt_label, mentions
+        except google_ai_mode.GenerationFailedError:
+            generation_failures += 1
+            if generation_failures < GENERATION_FAILED_ATTEMPTS:
+                logger.warning(
+                    "%s: AI Mode failed to generate content (%d/%d) -- retrying with a clean profile",
+                    attempt_label, generation_failures, GENERATION_FAILED_ATTEMPTS,
+                )
+                time.sleep(GENERATION_FAILED_PAUSE_SECONDS)
+                continue
+            logger.warning(
+                "%s: AI Mode failed to generate content %d times -- giving up on this attempt",
+                attempt_label, generation_failures,
+            )
+            return attempt_label, []
         except google_ai_mode.RateLimitedError:
-            if retry == 0:
+            if not rate_limit_retry_used:
+                rate_limit_retry_used = True
                 logger.warning(
                     "%s hit Google's rate limit -- waiting %ds before one retry",
                     attempt_label, RATE_LIMIT_BACKOFF_SECONDS,
@@ -333,9 +437,33 @@ def _run_one_attempt(query: str, attempt_label: str) -> tuple[str, list]:
                 continue
             logger.warning("%s still rate-limited after backoff -- giving up on this attempt", attempt_label)
             return attempt_label, []
+        except google_ai_mode.CaptchaBlockedError:
+            # A bot check the solver could not clear. Retrying immediately
+            # with yet another fresh profile tends to make this worse, since
+            # a brand-new profile is exactly what Google challenges, so this
+            # attempt is abandoned instead.
+            logger.warning("%s: bot check could not be cleared -- abandoning this attempt", attempt_label)
+            return attempt_label, []
+        except google_ai_mode.ChromiumNotFoundError:
+            raise
+        except Exception as e:
+            # Any other failure (timeout, stale element, renderer crash, a
+            # blank page) is treated the same way: throw the profile away and
+            # try again from clean state. Previously these fell through and
+            # silently cost the whole attempt.
+            other_failures += 1
+            if other_failures < OTHER_ERROR_ATTEMPTS:
+                logger.warning(
+                    "%s errored (%d/%d): %s -- retrying with a clean profile",
+                    attempt_label, other_failures, OTHER_ERROR_ATTEMPTS, e,
+                )
+                time.sleep(GENERATION_FAILED_PAUSE_SECONDS)
+                continue
+            logger.warning("%s errored %d times -- giving up on this attempt: %s",
+                           attempt_label, other_failures, e)
+            return attempt_label, []
         finally:
             shutil.rmtree(profile_dir, ignore_errors=True)
-    return attempt_label, []
 
 
 def discover_via_google_ai_mode(

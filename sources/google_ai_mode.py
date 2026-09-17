@@ -632,6 +632,21 @@ class ChromiumNotFoundError(RuntimeError):
     to explain why."""
 
 
+class CaptchaBlockedError(RuntimeError):
+    """Raised when Google shows a bot-check/CAPTCHA wall that the solver
+    extension could not clear. Deliberately distinct from the other errors:
+    resetting the profile is what tends to CAUSE these (a fresh profile with
+    no history looks more suspicious to Google than a warmed-up one), so the
+    caller should pause rather than immediately recycling again."""
+
+
+class GenerationFailedError(RuntimeError):
+    """Raised when Google AI Mode answers with "Something went wrong and the
+    content wasn't generated." Transient and not tied to the account or IP
+    (unlike RateLimitedError), so the caller should retry promptly with a
+    fresh browser profile rather than backing off or giving up."""
+
+
 class RateLimitedError(RuntimeError):
     """Raised when Google AI Mode itself returns "You've reached the
     request limit for AI responses. Try again in a little while." --
@@ -698,6 +713,16 @@ def search(query: str, headless: bool = False, profile_dir: str | None = None) -
     if result.get("rate_limited"):
         raise RateLimitedError(
             "Google AI Mode returned its own request-limit message -- back off before retrying."
+        )
+
+    if result.get("captcha"):
+        raise CaptchaBlockedError(
+            "Google showed a bot-check the solver could not clear -- pause before retrying."
+        )
+
+    if result.get("generation_failed"):
+        raise GenerationFailedError(
+            "Google AI Mode could not generate the content -- retry with a fresh profile."
         )
 
     if not result.get("success"):
