@@ -111,6 +111,72 @@ def _mentions_from_table(table_md: str) -> list[AiModeCompanyMention]:
     return mentions
 
 
+# Tail of a previous entry that can precede a real company name once entries
+# run together with no line breaks: a bare domain ("amcor.com",
+# "toppan.co.jp"), a lone TLD fragment left by a split ("com", "co.jp", "ag"),
+# or a finished sentence. Anchored to the FRONT of a captured name so only
+# leading noise is removed -- a period inside the name itself ("H.B. Fuller",
+# "Crocco S.p.A.") is never touched.
+_LEADING_DOMAIN_OR_TLD = re.compile(
+    r"^(?:[a-z0-9][a-z0-9-]*\.)?(?:com|co|net|org|in|io|de|fr|it|uk|eu|biz|tw|jp|kr|"
+    r"cz|sk|hr|rs|hu|ro|md|ua|kz|lv|lt|se|no|fi|es|pt|ph|th|my|sg|hk|id|ru|ag|nl|ca|"
+    r"za|sa|br|cn|gr|mx|au|ch|at|be|dk|ie|pl|tr)(?:\.[a-z]{2,3})*\b[\s.]*",
+    re.IGNORECASE,
+)
+
+
+# Section headings AI Mode emits inline ("North American Manufacturers &
+# Suppliers Amcor plc ..."), which glue onto the first company name of the
+# section when the answer has no line breaks. Confirmed in a real run's
+# candidate names.
+_SECTION_HEADING_PREFIX = re.compile(
+    r"^(?:(?:North|South|Latin|Central)\s+America(?:n)?|Asia[- ]Pacific|APAC|EMEA|"
+    r"Europe(?:an)?|Middle\s+East(?:\s*(?:&|and)\s*Africa)?|Africa(?:n)?|Global|"
+    r"Key|Major|Leading|Other|Additional|Top)\b[^.]{0,60}?"
+    r"(?:Manufacturers?|Suppliers?|Producers?|Players?|Companies|Brands?|Vendors?|"
+    r"Distributors?|Converters?)\b(?:\s*(?:&|and)\s*(?:Manufacturers?|Suppliers?|"
+    r"Producers?|Players?|Companies|Brands?|Vendors?|Distributors?|Converters?)\b)*[\s:—–-]*",
+    re.IGNORECASE,
+)
+
+
+def _trim_leading_noise(name: str) -> str:
+    """Strip a previous entry's trailing fragment off the front of a captured
+    name. Runs repeatedly because a split can leave more than one layer (e.g.
+    a domain followed by a sentence tail). Only ever removes from the start,
+    so real internal punctuation is preserved."""
+    prev = None
+    while prev != name:
+        prev = name
+        # A completed sentence before the name: keep only what follows the
+        # last ". " that is NOT part of an initial/abbreviation. Checked
+        # first so "Leading supplier. Berry Global Inc." -> "Berry Global Inc."
+        # Never split on a period that ends a common corporate abbreviation
+        # ("Co.", "Inc.", "Ltd.", "S.p.A.", "H.B.") -- those are inside a real
+        # name, not a sentence end. Without this, "Henkel AG & Co. KGaA" got
+        # truncated to just "KGaA".
+        sentence_split = re.split(
+            r"(?<![A-Z])(?<!\.[a-z])(?<!\.[a-z][a-z])(?<!\.[a-z][a-z][a-z])"
+            r"(?<!\bCo)(?<!\bInc)(?<!\bLtd)(?<!\bCorp)(?<!\bPvt)(?<!\bPte)(?<!\bBros)"
+            r"(?<!\bSt)(?<!\bMfg)(?<!\bIndus)(?<!\bPlc)(?<!\bGmbH)(?<!\bSA)(?<!\bAG)"
+            r"\.\s+",
+            name,
+        )
+        if len(sentence_split) > 1 and sentence_split[-1].strip():
+            name = sentence_split[-1].strip()
+        name = _SECTION_HEADING_PREFIX.sub("", name).strip()
+        name = _LEADING_DOMAIN_OR_TLD.sub("", name).strip()
+        # A leading ALL-CAPS/short technical token followed by a period is a
+        # description tail ("BOPP. Polyplex Corporation"), not part of the
+        # name -- the abbreviation guard above deliberately protects periods,
+        # so this handles the leading-position case explicitly.
+        name = re.sub(r"^[A-Z0-9]{2,6}\.\s+(?=[A-Z])", "", name).strip()
+        # A lowercase-leading token is never the start of a real company
+        # name here -- it is the tail of the previous description.
+        name = re.sub(r"^(?:[a-z][A-Za-z0-9&'’-]*\s+)+(?=[A-Z0-9])", "", name).strip()
+    return name
+
+
 def _mentions_from_text(answer_text: str) -> list[AiModeCompanyMention]:
     """Fallback for prose answers. AI Mode's real output uses the shape
     "Company Name (Country) – description." or, since the discovery prompt
@@ -136,9 +202,41 @@ def _mentions_from_text(answer_text: str) -> list[AiModeCompanyMention]:
     # description (e.g. "...Kinder Bueno. Bahlsen GmbH & Co. KG (Germany)")
     # can get swept into the name of the next entry, since there's no
     # newline to mark where one entry ends and the next begins.
+    # The boundary before a name must be a REAL sentence break, not just any
+    # period. Matching on a bare "." (the previous version) let a match start
+    # in the middle of a domain or a legal suffix, because those contain
+    # periods too: "...packaging. amcor.com Berry Global Inc. (USA) - ..."
+    # resumed right after "amcor." and captured the name as "com Berry Global
+    # Inc.", and "Henkel AG & Co. KGaA (Germany)" captured just "KGaA".
+    # Confirmed as the true source of the corrupted candidate names seen in a
+    # real run ("com Berry Global Inc.", "co.jp Toppan Holdings Inc.",
+    # "ag Crocco S.p.A.", "B. Fuller", "p.A.", "SAOG") -- every one of those
+    # candidates then failed to match its verdict during verification and was
+    # silently dropped as not relevant, which is what collapsed a 200-company
+    # run down to 17.
+    #
+    # A genuine break is a period followed by whitespace, where the period is
+    # NOT preceded by a single letter (initials like "H.B.", "S.p.A.") and NOT
+    # part of a domain (a TLD-looking token). Newline and start-of-text stay
+    # unconditional boundaries.
+    # Rather than trying to detect the boundary with a lookbehind on "." (the
+    # previous approach), the name is anchored by what FOLLOWS it -- the
+    # "(Country|domain) <dash>" structure -- and the name itself is taken as
+    # the trailing run of name-like tokens immediately before that paren.
+    # Anchoring on a bare "." boundary was the true source of the corrupted
+    # candidate names seen in a real run: periods occur inside domains and
+    # legal suffixes too, so "...packaging. amcor.com Berry Global Inc.
+    # (USA) - ..." resumed matching right after "amcor." and produced the
+    # name "com Berry Global Inc."; "Henkel AG & Co. KGaA (Germany)" produced
+    # just "KGaA". Every such candidate then failed to match its verdict
+    # during verification and was silently dropped as not relevant, which is
+    # what collapsed a 200-company run down to 17 final companies.
+    #
+    # _trim_leading_noise below then strips any leftover tail of the previous
+    # entry (a domain fragment or a finished sentence) off the front of the
+    # captured name, which a single regex cannot reliably do on its own.
     entry_start = re.compile(
-        r"(?:^|(?<=[.\n])\s*)(?:\d+[\.\)]|[-*•]\s*)?\*{0,2}"
-        r"(?P<name>[A-Z][A-Za-z0-9&.,'’À-ÿ\-]+(?:\s+[A-Za-z0-9&.,'’À-ÿ\-]+){0,6}?)"
+        r"(?P<name>[A-Za-z0-9][A-Za-z0-9&.,'’À-ÿ\-]*(?:\s+[A-Za-z0-9&.,'’À-ÿ\-]+){0,7})"
         r"\*{0,2}\s*"
         r"\((?P<paren>[A-Za-z0-9][A-Za-z0-9 /.&'’-]{1,60})\)"
         r"\s*[-–—:]\s*",
@@ -146,7 +244,7 @@ def _mentions_from_text(answer_text: str) -> list[AiModeCompanyMention]:
     )
     starts = list(entry_start.finditer(answer_text))
     for i, m in enumerate(starts):
-        name = _strip_citation_chip_prefix(m.group("name").strip())
+        name = _trim_leading_noise(_strip_citation_chip_prefix(m.group("name").strip()))
 
         # AI Mode's UI embeds inline citation chips (e.g. "Keychain.com",
         # "Biscuit people", source-name badges) directly in the flattened
@@ -262,7 +360,7 @@ def _mentions_from_dash_domain_text(answer_text: str) -> list[AiModeCompanyMenti
     false-matching the other, so this runs as a separate pass."""
     mentions: list[AiModeCompanyMention] = []
     for m in _DASH_DOMAIN_ENTRY.finditer(answer_text):
-        name = _strip_citation_chip_prefix(m.group("name").strip())
+        name = _trim_leading_noise(_strip_citation_chip_prefix(m.group("name").strip()))
         if _DOMAIN_PATTERN.search(name):
             continue
         words = [w.lower() for w in name.split()]
@@ -309,7 +407,7 @@ def _mentions_from_bare_domain_paren(answer_text: str) -> list[AiModeCompanyMent
     there's no other boundary marker between one entry and the next."""
     mentions: list[AiModeCompanyMention] = []
     for m in _BARE_DOMAIN_PAREN_ENTRY.finditer(answer_text):
-        name = _strip_citation_chip_prefix(m.group("name").strip())
+        name = _trim_leading_noise(_strip_citation_chip_prefix(m.group("name").strip()))
         if _DOMAIN_PATTERN.search(name):
             continue
         words = [w.lower() for w in name.split()]
