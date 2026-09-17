@@ -10,6 +10,47 @@ import { startRun, stopRun, getRun, downloadUrl, type RunSummary, ApiError } fro
 
 const POLL_INTERVAL_MS = 2000;
 
+// Ordered checkpoints of the actual pipeline (see the report(...) calls in
+// pipeline/universe_builder.py). The backend doesn't expose a numeric
+// percentage, so progress is approximated by matching the latest log
+// entry's stage name against this list and taking its position -- good
+// enough to show real forward motion instead of an unbounded log, without
+// requiring a backend change to add true percentages. "Below target" /
+// "Additional discovery complete" (the retry loop for a niche market) map
+// back onto the discovery/verify segment rather than advancing past it,
+// since the pipeline is genuinely looping there, not moving forward.
+const STAGE_ORDER = [
+  "Understanding market",
+  "Checking search engine availability",
+  "Querying Google AI Mode",
+  "Searching sources",
+  "Discovering companies",
+  "Directory mining complete",
+  "Widen loop plateaued",
+  "Google AI Mode discovery complete",
+  "Skipping website crawl",
+  "Crawling websites",
+  "Verifying",
+  "Below target",
+  "Additional discovery complete",
+  "Classifying",
+  "Deduplicating",
+  "Exporting",
+  "Done",
+];
+
+function progressPercent(progressLog: { stage: string }[] | undefined): number {
+  if (!progressLog || progressLog.length === 0) return 4; // just started
+  const lastStage = progressLog[progressLog.length - 1].stage;
+  const idx = STAGE_ORDER.indexOf(lastStage);
+  if (idx === -1) return 4;
+  // Reserve the first few percent for "already started" and the last few
+  // for "not literally done yet" so the bar never looks static at 0% or
+  // fully complete while still polling.
+  const pct = 4 + (idx / (STAGE_ORDER.length - 1)) * 94;
+  return Math.min(98, Math.round(pct));
+}
+
 export default function Step3Page() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -162,6 +203,33 @@ export default function Step3Page() {
           <p className="mt-1 text-sm text-ink-soft">
             This can take a while for a full discovery pass. Do not close this tab.
           </p>
+
+          {(() => {
+            const pct = progressPercent(run?.progress_log);
+            const latest = run?.progress_log.length
+              ? run.progress_log[run.progress_log.length - 1]
+              : null;
+            return (
+              <div className="mt-4">
+                <div className="flex items-center justify-between text-xs text-ink-soft">
+                  <span>{latest ? latest.stage : "Starting..."}</span>
+                  <span>{pct}%</span>
+                </div>
+                <div className="mt-1.5 h-2.5 w-full overflow-hidden rounded-full bg-canvas-2">
+                  <div
+                    className="h-full rounded-full bg-teal transition-[width] duration-500 ease-out"
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                {latest?.detail && (
+                  <p className="mt-1.5 truncate text-xs text-ink-soft" title={latest.detail}>
+                    {latest.detail}
+                  </p>
+                )}
+              </div>
+            );
+          })()}
+
           <div className="mt-4 max-h-80 space-y-1 overflow-y-auto rounded-xl border border-border bg-white p-4 font-mono text-xs text-ink-soft">
             {run?.progress_log.length ? (
               run.progress_log.map((entry, i) => (

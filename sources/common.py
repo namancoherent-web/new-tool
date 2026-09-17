@@ -17,12 +17,22 @@ JUNK_DOMAINS = {
 }
 
 
+# A real domain has at least one dot and only domain-legal characters. AI
+# Mode occasionally answers a website field with garbage/placeholder text
+# ("N/A", "unknown", "none", "-", ":") instead of leaving it empty, and
+# without this check each of those passed straight through as if it were a
+# genuine domain -- confirmed directly: a real export contained "Timac Agro
+# Perú" with a website of literally ":".
+_VALID_DOMAIN = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+
+
 def extract_domain(url: str) -> str:
     try:
         netloc = urlparse(url).netloc.lower()
-        return re.sub(r"^www\.", "", netloc)
+        domain = re.sub(r"^www\.", "", netloc)
     except Exception:
         return ""
+    return domain if _VALID_DOMAIN.match(domain) else ""
 
 
 def is_junk_domain(domain: str) -> bool:

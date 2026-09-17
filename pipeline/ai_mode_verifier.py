@@ -58,7 +58,16 @@ def _build_verify_query(mu: MarketUnderstanding, batch: list[VerifiedCandidate])
         '"brand_name":"","parent_or_independent":"Independent","country":"","reason":"one sentence"}]\n'
         "category: Manufacturer, Parent Company, Distributor, Supplier, Technology Provider, "
         "Brand, Retailer, Investor, Service Provider or Other. "
-        'parent_or_independent: "Independent", "Subsidiary of X", or "Parent Company".'
+        # "Subsidiary of X" as a schema template got echoed back literally
+        # ("Subsidiary of X" as the actual field value, several times in a
+        # real run) instead of AI Mode substituting the real parent name.
+        # Spelled out as an instruction instead of a fill-in-the-blank
+        # example, and told explicitly what to do when it knows a company is
+        # a subsidiary but not who owns it.
+        'parent_or_independent: "Independent" if it has no parent; if it is a subsidiary, write '
+        '"Subsidiary of " followed by the real parent company\'s name (never the literal word X); '
+        'if you know it is a subsidiary but not the parent\'s name, write "Subsidiary of unknown '
+        'parent"; write "Parent Company" only if this company itself has subsidiaries.'
     )
 
 
@@ -206,12 +215,21 @@ def _parse_verify_json(answer_text: str) -> dict[str, dict]:
         relevant = row.get("is_relevant")
         if isinstance(relevant, str):
             relevant = relevant.strip().lower().startswith(("y", "t"))
+        parent = str(row.get("parent_or_independent") or "").strip() or "Independent"
+        if parent.lower() in ("subsidiary of x", "subsidiary of x.", "subsidiary of"):
+            # Safety net: even with the schema example reworded, a literal
+            # echo of the placeholder must never reach the export -- confirmed
+            # in a real run's output ("Subsidiary of X" for three different
+            # companies). Downgraded to a plain "Independent" rather than
+            # dropping the row, since is_relevant and every other field are
+            # still trustworthy.
+            parent = "Independent"
         results[name.lower()] = {
             "company_name": name,
             "is_relevant": bool(relevant),
             "category": str(row.get("category") or "").strip() or "Other",
             "brand_name": str(row.get("brand_name") or "").strip() or name,
-            "parent_or_independent": str(row.get("parent_or_independent") or "").strip() or "Independent",
+            "parent_or_independent": parent,
             "hq_country": str(row.get("country") or "").strip(),
             "reason": str(row.get("reason") or "").strip(),
         }
