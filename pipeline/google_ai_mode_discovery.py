@@ -30,14 +30,20 @@ logger = logging.getLogger(__name__)
 # GOOGLE_AI_MODE_MAX_PARALLEL_BROWSERS in .env on a faster machine.
 PARALLEL_ATTEMPTS_PER_ROUND = CONFIG.google_ai_mode_max_parallel_browsers
 
-# How many candidates discovery collects before it stops. Deliberately far
-# above the 200 RELEVANT companies a run aims to deliver, because
-# verification rejects a large share of what discovery finds: measured
-# across real runs roughly 40% survive (232 discovered -> 91 relevant;
-# 283 -> 131). Stopping discovery at 200 therefore guaranteed a final
-# result near 100. Collecting ~600 means one pass clears the target at the
-# observed survival rate, instead of needing extra discover/verify passes.
-MIN_TARGET_COMPANIES = 600
+# How many candidates discovery collects before it stops -- checked between
+# rounds, not per attempt, so with PARALLEL_ATTEMPTS_PER_ROUND attempts
+# running at once the actual total can overshoot this by up to one round's
+# worth (confirmed directly: set to 600, a round added 417 at once, final
+# total was 778).
+#
+# Set below the 200 RELEVANT companies a run aims to deliver would guarantee,
+# because verification rejects a large share of what discovery finds:
+# measured across real runs roughly 40% survive (232 discovered -> 91
+# relevant; 283 -> 131; 778 -> 310). At 400 discovered the same rate lands
+# near 160, under the 200 target -- universe_builder's own retry loop
+# (discover again, then verify again) is what closes that gap, at the cost
+# of a slower run, rather than this constant forcing a single oversized pass.
+MIN_TARGET_COMPANIES = 400
 
 # If AI Mode queries haven't reached the target company count, retry up to
 # this many total attempts (run in parallel rounds of
