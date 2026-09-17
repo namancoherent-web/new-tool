@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import threading
 import time
+import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -161,6 +162,38 @@ _UI_NOISE = re.compile(
     r"Was this helpful\??|Show (?:more|less)|Copy code)\s*",
     re.IGNORECASE,
 )
+
+
+_LEGAL_SUFFIXES = (
+    "incorporated", "corporation", "limited", "holdings", "holding", "group",
+    "company", "inc", "llc", "ltd", "plc", "corp", "gmbh", "ag", "sa", "nv",
+    "bv", "spa", "sas", "sarl", "kg", "kgaa", "oyj", "oy", "ab", "as", "asa",
+    "pte", "pvt", "berhad", "bhd", "tbk", "co", "se", "aps", "srl", "sl",
+)
+
+
+def _match_key(name: str) -> str:
+    """Normalise a company name for matching: strip accents, punctuation and
+    case, collapse whitespace. "Klöckner Pentaplast" and "Klockner
+    Pentaplast" both become "klockner pentaplast"."""
+    folded = unicodedata.normalize("NFKD", name)
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    # A trailing parenthetical is an alias or qualifier, not part of the name
+    # ("Transcontinental Inc. (TC Transcontinental)"), and AI Mode includes
+    # it inconsistently.
+    folded = re.sub(r"\s*\([^)]*\)\s*$", "", folded)
+    folded = re.sub(r"[^\w\s]", " ", folded.lower())
+    return re.sub(r"\s+", " ", folded).strip()
+
+
+def _core_key(name: str) -> str:
+    """_match_key with trailing legal suffixes removed, so "Berry Global
+    Inc." matches "Berry Global". Only trailing words are stripped, and never
+    all of them, so a company actually named "Group" keeps its identity."""
+    words = _match_key(name).split()
+    while len(words) > 1 and words[-1] in _LEGAL_SUFFIXES:
+        words.pop()
+    return " ".join(words)
 
 
 def _parse_verify_json(answer_text: str) -> dict[str, dict]:
@@ -420,9 +453,27 @@ def verify_and_classify_via_ai_mode(
                 logger.info("Batch %s: parsed %d verdicts for %d companies sent", label, len(verdicts), len(batch_names))
                 all_verdicts.update(verdicts)
 
+    # AI Mode echoes a company name in its own preferred form, which often
+    # differs from the candidate string we sent: punctuation ("Toray
+    # Plastics (America), Inc." vs "Toray Plastics America"), a legal suffix
+    # ("Berry Global Inc." vs "Berry Global"), or an accent ("Klockner" vs
+    # "Klockner"). An exact lowercase lookup therefore missed verdicts that
+    # were successfully returned and parsed -- confirmed on a real run where
+    # all 211 verdicts parsed (40/40 per batch) yet ~75 companies, including
+    # Amcor, Berry Global, Sealed Air, Mondi and Uflex, were still marked
+    # "no verdict returned" and dropped. Matching on a normalised key, then
+    # on a suffix-stripped key, recovers those without loosening the rule
+    # that an unmatched company stays not relevant.
+    normalised_verdicts = {_match_key(k): v for k, v in all_verdicts.items()}
+    core_verdicts = {_core_key(k): v for k, v in all_verdicts.items()}
+
     classified: list[ClassifiedCompany] = []
     for c in candidates:
-        verdict = all_verdicts.get(c.name.lower())
+        verdict = (
+            all_verdicts.get(c.name.lower())
+            or normalised_verdicts.get(_match_key(c.name))
+            or core_verdicts.get(_core_key(c.name))
+        )
         if verdict is None:
             logger.info("No verdict returned for %r -- marking not relevant (silence is not assumed fine)", c.name)
             classified.append(ClassifiedCompany(
