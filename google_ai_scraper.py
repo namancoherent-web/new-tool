@@ -48,13 +48,45 @@ _driver_path_lock = threading.Lock()
 _cached_driver_path: str | None = None
 
 
-def _resolve_driver_path() -> str:
+def _detect_chromium_version(binary_path: str) -> str | None:
+    """Reads the installed Chromium binary's own file version via Windows'
+    PE version resource, using PowerShell (no extra Python dependency).
+    Needed because this tool runs a portable Chromium at a custom path, not
+    a system-installed Chrome -- ChromeDriverManager() with no arguments has
+    no way to detect that binary's version, and silently falls back to
+    fetching the single latest chromedriver instead. That drifts out of
+    sync the moment Chromium auto-updates itself without a matching
+    chromedriver also being fetched, breaking every browser launch until
+    someone notices and manually intervenes -- confirmed as a real failure
+    mode, not theoretical."""
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"(Get-Item '{binary_path}').VersionInfo.ProductVersion",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        version = result.stdout.strip()
+        return version or None
+    except Exception:
+        return None
+
+
+def _resolve_driver_path(binary_path: str | None = None) -> str:
     global _cached_driver_path
     if _cached_driver_path is not None:
         return _cached_driver_path
     with _driver_path_lock:
         if _cached_driver_path is None:
-            _cached_driver_path = ChromeDriverManager().install()
+            version = _detect_chromium_version(binary_path) if binary_path else None
+            _cached_driver_path = ChromeDriverManager(driver_version=version).install()
     return _cached_driver_path
 
 
@@ -145,14 +177,12 @@ class GoogleAIModeScraper:
         chrome_options.add_argument("--no-default-browser-check")
         chrome_options.add_argument("--hide-crash-restore-bubble")
 
-        # Load the captcha-raptor unpacked extension directly -- avoids
-        # relying on it having been manually installed into the profile via
-        # chrome://extensions, and --load-extension works even in headless=new.
-        captcha_ext_dir = (
-            Path(__file__).resolve().parent / "captcha-raptor" / "extension"
-        )
-        if captcha_ext_dir.is_dir():
-            chrome_options.add_argument(f"--load-extension={captcha_ext_dir}")
+        # CAPTCHA solving is handled by pipeline.recaptcha_solver directly
+        # driving this Selenium session -- no browser extension is loaded,
+        # so no IT extension policy on any deployment machine can block it.
+        # (Previously loaded captcha-raptor via --load-extension; ported to
+        # plain pipeline code after that load was found to be blocked by an
+        # enterprise Chrome/Chromium extension policy on a user's laptop.)
 
         # Enhanced stealth options
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
@@ -163,9 +193,9 @@ class GoogleAIModeScraper:
         # Resource-saving flags for low-spec machines (this tool is
         # distributed to laptops with as little as 8GB RAM and older CPUs,
         # running several of these windows at once) -- none of these affect
-        # page functionality or the captcha-raptor extension, which still
-        # needs images to load to analyze CAPTCHA grids, so image loading
-        # itself is deliberately left untouched.
+        # page functionality, and the CAPTCHA solver still needs images to
+        # load to analyze challenge grids, so image loading itself is
+        # deliberately left untouched.
         chrome_options.add_argument("--disable-background-timer-throttling")
         chrome_options.add_argument("--disable-backgrounding-occluded-windows")
         chrome_options.add_argument("--disable-renderer-backgrounding")
@@ -197,7 +227,7 @@ class GoogleAIModeScraper:
         )
 
         try:
-            service = Service(_resolve_driver_path())
+            service = Service(_resolve_driver_path(self.binary_location))
             # Add service args for better headless performance
             service.log_path = "NUL" if self.headless else None
             
@@ -326,17 +356,23 @@ class GoogleAIModeScraper:
                 # Checked before the others: a CAPTCHA page has none of the
                 # normal answer content, so every downstream check would
                 # otherwise report a misleading "empty answer".
-                if self._hit_captcha() and not self._wait_out_captcha():
-                    return {
-                        "question": question,
-                        "answer": None,
-                        "tables": [],
-                        "raw_html": None,
-                        "success": False,
-                        "error": "captcha",
-                        "captcha": True,
-                        "format": None,
-                    }
+                if self._hit_captcha():
+                    if not self._wait_out_captcha():
+                        return {
+                            "question": question,
+                            "answer": None,
+                            "tables": [],
+                            "raw_html": None,
+                            "success": False,
+                            "error": "captcha",
+                            "captcha": True,
+                            "format": None,
+                        }
+                    # Passing the check redirects back to the original
+                    # search, whose AI answer then has to generate from
+                    # scratch -- wait for it like a normal first load.
+                    self._handle_cookies()
+                    self._wait_for_generation_complete()
 
                 if self._hit_rate_limit():
                     self.log("Google AI Mode rate limit hit -- returning immediately instead of parsing an empty answer", "WARNING")
@@ -616,9 +652,9 @@ class GoogleAIModeScraper:
 
     # Google's bot-check wall. A fresh profile with no history is more likely
     # to be challenged than a warmed-up one, so recycling profiles to dodge
-    # rate limits makes these more common, not less. The captcha-raptor
-    # extension is loaded and may solve it on its own, so detection waits a
-    # while before declaring failure rather than bailing immediately.
+    # rate limits makes these more common, not less. pipeline.recaptcha_solver
+    # drives the actual solve attempt, so detection waits for that attempt to
+    # finish before declaring failure rather than bailing immediately.
     CAPTCHA_MARKERS = (
         "our systems have detected unusual traffic",
         "unusual traffic from your computer network",
@@ -628,8 +664,7 @@ class GoogleAIModeScraper:
         "verify it's you",
         "verify you're not a robot",
     )
-    CAPTCHA_SOLVE_WAIT_SECONDS = 45
-    CAPTCHA_POLL_SECONDS = 5
+    CAPTCHA_SOLVE_WAIT_SECONDS = 300
 
     def _hit_captcha(self) -> bool:
         try:
@@ -639,19 +674,51 @@ class GoogleAIModeScraper:
         return any(marker in body_text for marker in self.CAPTCHA_MARKERS)
 
     def _wait_out_captcha(self) -> bool:
-        """Give the captcha-raptor extension a chance to solve a challenge.
+        """Runs the ported reCAPTCHA solver against the current challenge.
         Returns True if the page cleared, False if it is still blocked. The
         caller then decides whether to retry -- a challenge that does not
         clear is not something a further reset will fix on its own."""
-        self.log("CAPTCHA/bot check detected -- waiting for the solver extension", "WARNING")
-        waited = 0
-        while waited < self.CAPTCHA_SOLVE_WAIT_SECONDS:
-            time.sleep(self.CAPTCHA_POLL_SECONDS)
-            waited += self.CAPTCHA_POLL_SECONDS
-            if not self._hit_captcha():
-                self.log(f"CAPTCHA cleared after {waited}s")
+        from pipeline.recaptcha_solver import RecaptchaBlockedError, RecaptchaSolver
+
+        self.log("CAPTCHA/bot check detected -- running the ported reCAPTCHA solver", "WARNING")
+        solver = RecaptchaSolver(self.driver, overall_timeout=self.CAPTCHA_SOLVE_WAIT_SECONDS)
+        try:
+            if not solver.has_recaptcha():
+                # Google's own text-based bot wall (no reCAPTCHA widget at
+                # all, e.g. "unusual traffic" interstitial) -- nothing to
+                # solve, just report still-blocked so the caller can retry
+                # with a fresh profile.
+                self.log("CAPTCHA marker text present but no reCAPTCHA widget found", "WARNING")
+                return not self._hit_captcha()
+            solved = solver.solve()
+        except RecaptchaBlockedError:
+            self.log("reCAPTCHA showed its own automated-traffic block page", "WARNING")
+            return False
+        if not solved:
+            self.log("CAPTCHA still present after solve attempt", "WARNING")
+            return False
+
+        # google.com/sorry submits itself once the checkbox passes and
+        # redirects to the original search. Give that time; if it hasn't
+        # moved after a few seconds, submit the page's form ourselves.
+        wait_until = time.time() + 20
+        submitted = False
+        while time.time() < wait_until:
+            if "/sorry/" not in (self.driver.current_url or "") and not self._hit_captcha():
+                self.log("CAPTCHA solved")
                 return True
-        self.log(f"CAPTCHA still present after {waited}s", "WARNING")
+            if not submitted and time.time() > wait_until - 15:
+                try:
+                    self.driver.switch_to.default_content()
+                    self.driver.execute_script(
+                        "var f = document.getElementById('captcha-form') || document.querySelector('form');"
+                        "if (f) f.submit();"
+                    )
+                except Exception:
+                    pass
+                submitted = True
+            time.sleep(1)
+        self.log("CAPTCHA passed but the page did not move on", "WARNING")
         return False
 
     # The prompt itself contains a JSON schema example with realistic-looking
