@@ -215,6 +215,23 @@ def _fit_brief(brief: str) -> str:
     return trimmed
 
 
+def _market_header(mu: MarketUnderstanding) -> str:
+    """The market, geography and requested company types as typed into
+    their own fields, stated ahead of the brief. A real brief ("get me 200+
+    manufacturers, distributors combined of this market") referred to "this
+    market" without naming it; sent alone, AI Mode replied asking which
+    market was meant and the run collected nothing."""
+    lines = []
+    if mu.market_name.strip():
+        lines.append(f"Market: {mu.market_name.strip()}")
+    if mu.geography.strip():
+        lines.append(f"Geography: {mu.geography.strip()}")
+    category = mu.category_prompt.strip()
+    if category and category.lower() not in {"all", "all players", "all relevant players", "all companies", "players", "companies"}:
+        lines.append(f"Company types wanted: {category}")
+    return ("\n".join(lines) + "\n\n") if lines else ""
+
+
 def build_primary_query(mu: MarketUnderstanding) -> str:
     """Build the single AI Mode query for this run. If the user supplied a
     detailed brief (inclusion/exclusion rules, segmentation, independence
@@ -226,7 +243,7 @@ def build_primary_query(mu: MarketUnderstanding) -> str:
     but a brief that forgets to should still push for real breadth rather
     than default to a short illustrative list)."""
     if mu.brief.strip():
-        brief_text = _fit_brief(mu.brief.strip()) + (
+        brief_text = _market_header(mu) + _fit_brief(mu.brief.strip()) + (
             f"\n\nIf the above does not already specify a target number of companies, "
             f"aim for at least {MIN_TARGET_COMPANIES} real, verifiable companies rather "
             f"than a short illustrative list."
@@ -284,7 +301,7 @@ def build_category_diversity_query(mu: MarketUnderstanding, role_description: st
     rules still apply -- only the role focus changes."""
     if mu.brief.strip():
         role_focused = (
-            f"{mu.brief.strip()}\n\n"
+            f"{_market_header(mu)}{mu.brief.strip()}\n\n"
             f"For this specific query, focus ONLY on identifying real, verifiable "
             f"{role_description}. Do not list manufacturers or brand owners here -- "
             f"only the role described above."

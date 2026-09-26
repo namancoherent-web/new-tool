@@ -631,10 +631,33 @@ def extract_company_mentions(result: dict) -> list[AiModeCompanyMention]:
 
     seen: dict[str, AiModeCompanyMention] = {}
     for m in mentions:
+        # Applied here, after every parser, because the JSON reader (the main
+        # path) had no placeholder check: AI Mode shows our own question on
+        # the page, whose JSON example ("ACME EXAMPLE CO ...") was read back
+        # as a company, and a clarifying reply ("Please specify the target
+        # market or product.") was read as another. Both then went into the
+        # "already found" list and were quoted into every later query.
+        if is_own_prompt_placeholder(m.name) or _looks_like_instruction(m.name):
+            continue
         key = m.name.lower().strip()
         if key and key not in seen:
             seen[key] = m
     return list(seen.values())
+
+
+_INSTRUCTION_START = re.compile(
+    r"^(?:please|kindly|provide|specify|note|here (?:is|are)|it looks|i will|i can|"
+    r"i'm|i am|let me|sorry|unfortunately|could you|can you)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_instruction(name: str) -> bool:
+    """A sentence from AI Mode's own reply rather than a company name. Needs
+    both an instruction-style opening and sentence length, so short real
+    names that merely start with such a word ("Provide Commerce") survive."""
+    name = name.strip()
+    return bool(_INSTRUCTION_START.match(name)) and len(name.split()) >= 4
 
 
 class ChromiumNotFoundError(RuntimeError):
