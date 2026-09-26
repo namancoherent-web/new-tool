@@ -560,26 +560,27 @@ class GoogleAIModeScraper:
             }
 
     def _handle_cookies(self):
-        """Handle cookie consent popup"""
-        try:
-            cookie_selectors = [
-                "//button[contains(., 'Accept all')]",
-                "//button[contains(., 'I agree')]",
-                "//button[@id='L2AGLb']",
-                "//button[contains(text(), 'Reject all')]",
-            ]
+        """Handle cookie consent popup.
 
-            for selector in cookie_selectors:
-                try:
-                    button = WebDriverWait(self.driver, 5).until(  # Increased timeout
-                        EC.element_to_be_clickable((By.XPATH, selector))
-                    )
-                    button.click()
-                    self.log("✓ Cookie consent handled")
-                    self.human_delay(1, 2)
-                    return
-                except TimeoutException:
-                    continue
+        One combined lookup with a short wait: trying the four buttons one
+        after another at 5s each cost ~20s of dead time on every query when
+        (as usual) there was no banner at all -- and on a CAPTCHA page that
+        delay came before the checkbox could be clicked."""
+        if self._hit_captcha():
+            return
+        any_consent_button = (
+            "//button[contains(., 'Accept all')]"
+            " | //button[contains(., 'I agree')]"
+            " | //button[@id='L2AGLb']"
+            " | //button[contains(text(), 'Reject all')]"
+        )
+        try:
+            button = WebDriverWait(self.driver, 2).until(
+                EC.element_to_be_clickable((By.XPATH, any_consent_button))
+            )
+            button.click()
+            self.log("✓ Cookie consent handled")
+            self.human_delay(1, 2)
         except Exception:
             pass
 
@@ -773,6 +774,11 @@ class GoogleAIModeScraper:
         which works regardless of the exact DOM structure Google uses.
         """
         self.log("Waiting for AI Mode response to finish generating...")
+        # A CAPTCHA page never "finishes generating", so without this the
+        # solver only started after the full stability wait (~20s) had run
+        # out on a page with no answer on it.
+        if self._hit_captcha():
+            return
         last_len = -1
         stable_count = 0
         stuck_stable_count = 0
@@ -789,6 +795,10 @@ class GoogleAIModeScraper:
 
             if self._hit_rate_limit():
                 self.log("Google AI Mode rate limit hit -- stopping generation wait immediately", "WARNING")
+                return
+
+            if self._hit_captcha():
+                self.log(f"CAPTCHA page detected after {elapsed:.0f}s -- stopping generation wait to solve it")
                 return
 
             # Bail out the moment Google says it failed, instead of waiting out
