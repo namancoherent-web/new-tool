@@ -448,6 +448,7 @@ def verify_and_classify_via_ai_mode(
     candidates: list[VerifiedCandidate],
     mu: MarketUnderstanding,
     cancel_event: threading.Event | None = None,
+    deadline: float | None = None,
 ) -> list[ClassifiedCompany]:
     """Replaces DeepSeek classification entirely: batches discovered
     candidates into groups of VERIFY_BATCH_SIZE, sends each batch to
@@ -476,6 +477,12 @@ def verify_and_classify_via_ai_mode(
         for round_start in range(0, len(batches), PARALLEL_VERIFY_BATCHES):
             if cancel_event is not None and cancel_event.is_set():
                 logger.info("Verification cancelled by user after %d/%d batch(es)", round_start, len(batches))
+                break
+            # Run time limit: batches not started by the cut-off stay
+            # unverified, and unverified companies are left out, the same as
+            # any company AI Mode does not confirm.
+            if deadline is not None and time.time() >= deadline:
+                logger.warning("Verification time limit reached after %d/%d batch(es)", round_start, len(batches))
                 break
             round_batches = batches[round_start:round_start + PARALLEL_VERIFY_BATCHES]
             futures = {}

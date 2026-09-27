@@ -528,6 +528,7 @@ def discover_via_google_ai_mode(
     mu: MarketUnderstanding,
     cancel_event: threading.Event | None = None,
     already_found: list[str] | None = None,
+    deadline: float | None = None,
 ) -> list[EnrichedCandidate]:
     """Send the user's brief (or a generated equivalent) to Google AI Mode,
     running attempts in rounds of PARALLEL_ATTEMPTS_PER_ROUND concurrent
@@ -565,11 +566,21 @@ def discover_via_google_ai_mode(
     # runs never interfere with each other.
     attempt_budget = MAX_DISCOVERY_ATTEMPTS
 
+    # `deadline` (epoch seconds) is the run's discovery cut-off: no new round
+    # starts after it, so the whole run stays inside its time limit. Rounds
+    # already running are allowed to finish.
+    def _time_left() -> bool:
+        if deadline is not None and time.time() >= deadline:
+            logger.info("Discovery time limit reached with %d companies -- no new rounds", len(candidates))
+            return False
+        return True
+
     with ThreadPoolExecutor(max_workers=PARALLEL_ATTEMPTS_PER_ROUND) as executor:
         while (
             attempts_run < attempt_budget
             and len(candidates) < MIN_TARGET_COMPANIES
             and not (cancel_event is not None and cancel_event.is_set())
+            and _time_left()
         ):
             round_size = min(PARALLEL_ATTEMPTS_PER_ROUND, attempt_budget - attempts_run)
             # Every attempt in a round is built from the SAME already_found
@@ -719,6 +730,7 @@ def discover_via_google_ai_mode(
             len(candidates) < NICHE_MARKET_FLOOR
             and len(candidates) < MIN_TARGET_COMPANIES
             and not (cancel_event is not None and cancel_event.is_set())
+            and _time_left()
         ):
             logger.warning(
                 "Only %d companies after the normal %d-attempt budget (below the %d floor) -- "
@@ -732,6 +744,7 @@ def discover_via_google_ai_mode(
                 and len(candidates) < NICHE_MARKET_FLOOR
                 and len(candidates) < MIN_TARGET_COMPANIES
                 and not (cancel_event is not None and cancel_event.is_set())
+                and _time_left()
             ):
                 round_size = min(PARALLEL_ATTEMPTS_PER_ROUND, attempt_budget - attempts_run)
                 already_found = prior_names + [c.name for c in candidates]

@@ -33,6 +33,14 @@ logger = logging.getLogger(__name__)
 # ~60 Turkish porcelain companies) finishes instead of looping forever.
 MAX_RELEVANT_PASSES = 6
 
+# A run must finish within 25 minutes (user-set). Measured from the start of
+# the run: discovery (all passes) starts nothing new after minute 14,
+# verification starts no new batch after minute 23, which leaves room for
+# work already in flight and the export. A single stuck attempt is bounded
+# separately by the scraper's CAPTCHA and generation timeouts.
+DISCOVERY_CUTOFF_SECONDS = 14 * 60
+VERIFY_CUTOFF_SECONDS = 23 * 60
+
 
 @dataclass
 class RunResult:
@@ -140,7 +148,9 @@ def run_universe_search(
         # entirely -- slower and lower-volume per run than the multi-source
         # path, but avoids DDG's anti-bot blocking issues altogether.
         report("Querying Google AI Mode", "sole discovery source for this run (opens a visible browser window)")
-        candidates = discover_via_google_ai_mode(mu, cancel_event=cancel_event)
+        candidates = discover_via_google_ai_mode(
+            mu, cancel_event=cancel_event, deadline=start + DISCOVERY_CUTOFF_SECONDS
+        )
         check_cancelled()
         report("Google AI Mode discovery complete", f"{len(candidates)} companies found")
     else:
@@ -247,7 +257,9 @@ def run_universe_search(
 
         check_cancelled()
         report("Classifying", f"{len(verified_ok)} verified candidates (Google AI Mode)")
-        classified = verify_and_classify_via_ai_mode(verified_ok, mu, cancel_event=cancel_event)
+        classified = verify_and_classify_via_ai_mode(
+            verified_ok, mu, cancel_event=cancel_event, deadline=start + VERIFY_CUTOFF_SECONDS
+        )
         check_cancelled()
 
         if no_category_filter:
@@ -288,13 +300,20 @@ def run_universe_search(
             break
         if not ai_mode_only:
             break
+        if time.time() - start >= DISCOVERY_CUTOFF_SECONDS:
+            report(
+                "Time limit reached",
+                f"stopping after {pass_num} pass(es) with {relevant_so_far} relevant companies",
+            )
+            break
 
         # Go find more, excluding everything already seen so the next pass
         # cannot simply return the same companies again.
         check_cancelled()
         report("Below target", f"searching for more companies (pass {pass_num + 1})")
         more = discover_via_google_ai_mode(
-            mu, cancel_event=cancel_event, already_found=sorted(seen_candidate_names)
+            mu, cancel_event=cancel_event, already_found=sorted(seen_candidate_names),
+            deadline=start + DISCOVERY_CUTOFF_SECONDS,
         )
         fresh = [c for c in more if c.name.lower().strip() not in seen_candidate_names]
         for c in fresh:

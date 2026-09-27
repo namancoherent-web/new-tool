@@ -674,7 +674,7 @@ class GoogleAIModeScraper:
         "verify it's you",
         "verify you're not a robot",
     )
-    CAPTCHA_SOLVE_WAIT_SECONDS = 300
+    CAPTCHA_SOLVE_WAIT_SECONDS = 120
 
     def _hit_captcha(self) -> bool:
         try:
