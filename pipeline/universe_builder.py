@@ -15,7 +15,7 @@ from pipeline.deduplicator import deduplicate
 from pipeline.directory_miner import expand_via_directories, looks_like_directory
 from pipeline.engine_health import probe_engines
 from pipeline.exporter import export_all
-from pipeline.google_ai_mode_discovery import discover_via_google_ai_mode
+from pipeline.google_ai_mode_discovery import discover_via_google_ai_mode, final_max, requested_count
 from pipeline.ai_mode_market_understanding import understand_market_via_ai_mode
 from pipeline.models import ClassifiedCompany, MarketUnderstanding
 from pipeline.prefilter import prefilter_candidates
@@ -31,7 +31,6 @@ logger = logging.getLogger(__name__)
 # ones that do not genuinely belong. MAX_RELEVANT_PASSES caps the effort so a
 # genuinely narrow market (confirmed real: Google AI Mode itself only knows
 # ~60 Turkish porcelain companies) finishes instead of looping forever.
-RELEVANT_TARGET = 200
 MAX_RELEVANT_PASSES = 6
 
 
@@ -232,6 +231,8 @@ def run_universe_search(
     total_verified = 0
     pass_num = 0
     barren_rounds = 0
+    # 200 relevant for a country/region, 300 for global (user-set).
+    relevant_target = requested_count(geography)
 
     while True:
         pass_num += 1
@@ -273,10 +274,10 @@ def run_universe_search(
         relevant_so_far = len(deduplicate(kept))
         report(
             "Relevant companies so far",
-            f"{relevant_so_far} (target {RELEVANT_TARGET}, pass {pass_num}/{MAX_RELEVANT_PASSES})",
+            f"{relevant_so_far} (target {relevant_target}, pass {pass_num}/{MAX_RELEVANT_PASSES})",
         )
 
-        if relevant_so_far >= RELEVANT_TARGET:
+        if relevant_so_far >= relevant_target:
             report("Target reached", f"{relevant_so_far} relevant companies")
             break
         if pass_num >= MAX_RELEVANT_PASSES:
@@ -316,6 +317,12 @@ def run_universe_search(
     report("Deduplicating", f"{len(kept)} companies before dedup")
     final_companies = deduplicate(kept)
     final_companies.sort(key=lambda c: (-c.confidence, c.company_name.lower()))
+    # Final list is capped at 250 for a country/region and 300 for global
+    # (user-set); the highest-confidence companies are the ones kept.
+    cap = final_max(geography)
+    if len(final_companies) > cap:
+        report("Capping", f"{len(final_companies)} relevant companies, keeping the top {cap}")
+        final_companies = final_companies[:cap]
 
     report("Exporting", f"{len(final_companies)} final companies")
     basename = f"{_slugify(market_name)}_{_slugify(geography)}_{_slugify(category_prompt)}"

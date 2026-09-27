@@ -215,6 +215,35 @@ def _fit_brief(brief: str) -> str:
     return trimmed
 
 
+# How many companies every query asks AI Mode for, and how big the final list
+# may get. User-set: a country/region run ends with 200-250 companies, a
+# global run with 300, and every single query must state the number outright
+# -- not only when the brief happens to leave it out.
+REGION_REQUEST_COUNT = 200
+REGION_FINAL_MAX = 250
+GLOBAL_REQUEST_COUNT = 300
+GLOBAL_FINAL_MAX = 300
+
+
+def is_global(geography: str) -> bool:
+    g = geography.strip().lower()
+    return g in {"", "world", "international", "all countries"} or "global" in g or "worldwide" in g
+
+
+def requested_count(geography: str) -> int:
+    """The "I need N+ companies" number sent in every query, and the
+    relevant-company count at which the run stops looking for more."""
+    return GLOBAL_REQUEST_COUNT if is_global(geography) else REGION_REQUEST_COUNT
+
+
+def final_max(geography: str) -> int:
+    return GLOBAL_FINAL_MAX if is_global(geography) else REGION_FINAL_MAX
+
+
+def _count_line(mu: MarketUnderstanding) -> str:
+    return f"I need {requested_count(mu.geography)}+ companies."
+
+
 def _market_header(mu: MarketUnderstanding) -> str:
     """The market, geography and requested company types as typed into
     their own fields, stated ahead of the brief. A real brief ("get me 200+
@@ -229,7 +258,8 @@ def _market_header(mu: MarketUnderstanding) -> str:
     category = mu.category_prompt.strip()
     if category and category.lower() not in {"all", "all players", "all relevant players", "all companies", "players", "companies"}:
         lines.append(f"Company types wanted: {category}")
-    return ("\n".join(lines) + "\n\n") if lines else ""
+    lines.append(_count_line(mu))
+    return "\n".join(lines) + "\n\n"
 
 
 def build_primary_query(mu: MarketUnderstanding) -> str:
@@ -243,11 +273,7 @@ def build_primary_query(mu: MarketUnderstanding) -> str:
     but a brief that forgets to should still push for real breadth rather
     than default to a short illustrative list)."""
     if mu.brief.strip():
-        brief_text = _market_header(mu) + _fit_brief(mu.brief.strip()) + (
-            f"\n\nIf the above does not already specify a target number of companies, "
-            f"aim for at least {MIN_TARGET_COMPANIES} real, verifiable companies rather "
-            f"than a short illustrative list."
-        )
+        brief_text = _market_header(mu) + _fit_brief(mu.brief.strip())
         return ACCURACY_PREFIX + brief_text + ACCURACY_SUFFIX
 
     # No brief at all -- falls back to a generic auto-generated query
@@ -265,7 +291,7 @@ def build_primary_query(mu: MarketUnderstanding) -> str:
     )
     hint = _category_hint(mu.category_prompt)
     base = (
-        f"Identify and provide a validated list of at least {MIN_TARGET_COMPANIES} independent, "
+        f"{_count_line(mu)} Identify and provide a validated list of independent, "
         f"relevant, non-overlapping companies/players operating in the {mu.market_name} "
         f"({mu.geography}). {hint} Include major, mid-size, and smaller regional or specialist "
         f"companies -- not just the most famous names. {TABLE_FORMAT_HINT}"
@@ -310,7 +336,7 @@ def build_category_diversity_query(mu: MarketUnderstanding, role_description: st
 
     hint = _category_hint(mu.category_prompt)
     base = (
-        f"Identify and provide a validated list of real, verifiable {role_description} "
+        f"{_count_line(mu)} Identify and provide a validated list of real, verifiable {role_description} "
         f"operating in the {mu.market_name} ({mu.geography}). {hint} {TABLE_FORMAT_HINT}"
     )
     return ACCURACY_PREFIX + base + ACCURACY_SUFFIX
