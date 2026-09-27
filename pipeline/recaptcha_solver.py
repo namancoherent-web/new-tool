@@ -921,48 +921,57 @@ class RecaptchaSolver:
         import time as _time
 
         deadline = _time.monotonic() + self.overall_timeout
-        if self.click_checkbox():
-            return True
+        try:
+            if self.click_checkbox():
+                return True
+        except Exception as e:
+            logger.info("reCAPTCHA checkbox click interrupted: %r", e)
 
         state = {"dyn33_task": None, "dyn33_recog_count": 0, "dyn33_updated_idx": []}
         hidden_since: float | None = None
 
         while _time.monotonic() < deadline:
-            # Re-evaluate the whole widget every pass. Checking "solved" only
-            # after a completed round meant a pass that landed mid-round
-            # (popup hidden, stale grid still in the DOM) was never noticed.
-            self.driver.switch_to.default_content()
-            if self._find_anchor_frame() is None:
-                # Widget gone: the host page (e.g. google.com/sorry) accepted
-                # the token and navigated away.
-                return True
-            if self.is_solved():
-                return True
-            if self._is_expired():
-                logger.info("reCAPTCHA expired -- requesting a fresh challenge")
-                if self.click_checkbox():
+            # The whole pass is guarded, not just the round: Google swaps
+            # frames and pages under us at any step (a replaced challenge
+            # frame between finding it and switching into it raised a stale
+            # element error that killed the whole query). Any such change
+            # just means "look again" on the next pass.
+            try:
+                # Re-evaluate the whole widget every pass. Checking "solved"
+                # only after a completed round meant a pass that landed
+                # mid-round (popup hidden, stale grid still in the DOM) was
+                # never noticed.
+                self.driver.switch_to.default_content()
+                if self._find_anchor_frame() is None:
+                    # Widget gone: the host page (e.g. google.com/sorry)
+                    # accepted the token and navigated away.
                     return True
-                hidden_since = None
-                _time.sleep(1.0)
-                continue
-
-            frame = self._visible_challenge_frame()
-            if frame is None:
-                # Popup hidden: either Google is verifying the last answer
-                # (resolves in ~1-2s) or it closed the popup without a pass.
-                now = _time.monotonic()
-                if hidden_since is None:
-                    hidden_since = now
-                elif now - hidden_since > 8:
+                if self.is_solved():
+                    return True
+                if self._is_expired():
+                    logger.info("reCAPTCHA expired -- requesting a fresh challenge")
                     if self.click_checkbox():
                         return True
                     hidden_since = None
-                _time.sleep(0.5)
-                continue
-            hidden_since = None
+                    _time.sleep(1.0)
+                    continue
 
-            self.driver.switch_to.frame(frame)
-            try:
+                frame = self._visible_challenge_frame()
+                if frame is None:
+                    # Popup hidden: either Google is verifying the last answer
+                    # (resolves in ~1-2s) or it closed the popup without a pass.
+                    now = _time.monotonic()
+                    if hidden_since is None:
+                        hidden_since = now
+                    elif now - hidden_since > 8:
+                        if self.click_checkbox():
+                            return True
+                        hidden_since = None
+                    _time.sleep(0.5)
+                    continue
+                hidden_since = None
+
+                self.driver.switch_to.frame(frame)
                 if not self._solve_round(state):
                     self.driver.switch_to.default_content()
                     return False
@@ -970,13 +979,14 @@ class RecaptchaSolver:
                 self.driver.switch_to.default_content()
                 raise
             except Exception as e:
-                # Grid re-rendered under us (stale elements etc.) -- just
-                # re-evaluate from the top on the next pass.
-                logger.info("reCAPTCHA round interrupted: %r", e)
+                logger.info("reCAPTCHA pass interrupted: %r", e)
                 _time.sleep(0.5)
 
-        self.driver.switch_to.default_content()
-        return self.is_solved()
+        try:
+            self.driver.switch_to.default_content()
+            return self.is_solved()
+        except Exception:
+            return False
 
     def _solve_round(self, state: dict) -> bool:
         """One read -> classify -> click -> (verify) pass on the visible
