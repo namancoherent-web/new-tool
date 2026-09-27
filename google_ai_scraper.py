@@ -29,7 +29,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import ElementNotInteractableException, StaleElementReferenceException, TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 
@@ -433,70 +433,66 @@ class GoogleAIModeScraper:
             self._handle_cookies()
             self.human_delay(0.5, 1)
 
-            # Find the "Ask anything" input box
-            self.log("Looking for AI Mode input box...")
-            input_selectors = [
-                "//textarea[contains(@placeholder, 'Ask anything')]",
-                "//textarea[@name='q']",
-                "//textarea[contains(@aria-label, 'Search')]",
-                "//input[@name='q']",
-                "//div[@role='combobox']//textarea",
-                "//textarea",  # Broader fallback
-            ]
+            # This path needs its own CAPTCHA check: the extension used to
+            # solve one on any page by itself, but the pipeline solver only
+            # runs where it is called. Unchecked, the CAPTCHA page's hidden
+            # response <textarea> was picked up as the input box and every
+            # such attempt failed with "element not interactable".
+            if not self._clear_captcha_if_present():
+                return self._captcha_failed_result(question)
 
-            search_input = None
-            for selector in input_selectors:
+            # Google can swap the page for a CAPTCHA a moment after it loads
+            # -- while the question is being typed -- which left the held
+            # input box stale ("stale element reference") and the attempt
+            # lost. If the box goes away mid-typing, clear whatever replaced
+            # it and start the typing over on the fresh page.
+            submitted = False
+            for _ in range(3):
+                search_input = self._find_input_box()
+                if search_input is None:
+                    if self._hit_captcha():
+                        if not self._clear_captcha_if_present():
+                            return self._captcha_failed_result(question)
+                        continue
+                    with open("ai_mode_page.html", "w", encoding="utf-8") as f:
+                        f.write(self.driver.page_source)
+                    return {
+                        "question": question,
+                        "answer": None,
+                        "tables": [],
+                        "raw_html": None,
+                        "success": False,
+                        "error": "Could not find AI Mode input box. Page saved to ai_mode_page.html",
+                        "format": None,
+                    }
                 try:
-                    search_input = WebDriverWait(self.driver, 15).until(  # Increased timeout
-                        EC.presence_of_element_located((By.XPATH, selector))
-                    )
-                    # Make sure element is actually visible and interactable
-                    WebDriverWait(self.driver, 5).until(
-                        EC.element_to_be_clickable((By.XPATH, selector))
-                    )
-                    self.log(
-                        f"✓ Found input box with selector: {selector[:50]}..."
-                    )
+                    self.driver.execute_script("arguments[0].scrollIntoView(true);", search_input)
+                    self.human_delay(0.5, 1)
+                    search_input.click()
+                    self.human_delay(0.3, 0.5)
+                    search_input.clear()
+                    self.human_delay(0.3, 0.5)
+                    self.human_type(search_input, question)
+                    self.human_delay(0.5, 1)
+                    self.log("Submitting question...")
+                    search_input.send_keys(Keys.RETURN)
+                    submitted = True
                     break
-                except TimeoutException:
-                    continue
-
-            if not search_input:
-                # Take screenshot for debugging (works in headless too!)
-                if self.headless:
-                    self.driver.save_screenshot("ai_mode_debug.png")
-                    self.log("Screenshot saved to ai_mode_debug.png for debugging")
-
-                # Save page for debugging
-                with open("ai_mode_page.html", "w", encoding="utf-8") as f:
-                    f.write(self.driver.page_source)
+                except (StaleElementReferenceException, ElementNotInteractableException) as e:
+                    self.log(f"Input box changed while typing ({e.__class__.__name__}) -- rechecking the page", "WARNING")
+                    if not self._clear_captcha_if_present():
+                        return self._captcha_failed_result(question)
+                    self.human_delay(1, 2)
+            if not submitted:
                 return {
                     "question": question,
                     "answer": None,
                     "tables": [],
                     "raw_html": None,
                     "success": False,
-                    "error": "Could not find AI Mode input box. Page saved to ai_mode_page.html",
+                    "error": "Input box kept changing while typing the question",
                     "format": None,
                 }
-
-            # Scroll element into view (important for headless)
-            self.driver.execute_script("arguments[0].scrollIntoView(true);", search_input)
-            self.human_delay(0.5, 1)
-
-            # Click to focus
-            search_input.click()
-            self.human_delay(0.3, 0.5)
-
-            # Clear and type the question
-            search_input.clear()
-            self.human_delay(0.3, 0.5)
-            self.human_type(search_input, question)
-            self.human_delay(0.5, 1)
-
-            # Submit the question
-            self.log("Submitting question...")
-            search_input.send_keys(Keys.RETURN)
 
             # Wait for the streamed answer to actually finish generating
             # rather than a fixed guess -- long/complex briefs can take
@@ -504,6 +500,14 @@ class GoogleAIModeScraper:
             # half-finished (or still-echoing-the-prompt) page.
             self.log("Waiting for AI response...")
             self._wait_for_generation_complete()
+
+            # Google can also challenge right after the question is submitted.
+            # Passing it redirects to the results for that question, which
+            # then have to generate.
+            if self._hit_captcha():
+                if not self._clear_captcha_if_present():
+                    return self._captcha_failed_result(question)
+                self._wait_for_generation_complete()
 
             # Extract the AI response (HTML)
             ai_response_html = self._extract_ai_response()
@@ -543,6 +547,11 @@ class GoogleAIModeScraper:
 
         except Exception as e:
             self.log(f"✗ Error asking AI Mode: {e}", "ERROR")
+            # The scraper's own log is off in pipeline runs (verbose=False),
+            # so without this a failure only showed Selenium's message with
+            # no hint of which step raised it.
+            import logging
+            logging.getLogger(__name__).warning("ask_ai_mode failed", exc_info=True)
             # Take screenshot on error
             try:
                 if self.headless:
@@ -673,6 +682,53 @@ class GoogleAIModeScraper:
         except Exception:
             return False
         return any(marker in body_text for marker in self.CAPTCHA_MARKERS)
+
+    _INPUT_SELECTORS = (
+        "//textarea[contains(@placeholder, 'Ask anything')]",
+        "//textarea[@name='q']",
+        "//textarea[contains(@aria-label, 'Search')]",
+        "//input[@name='q']",
+        "//div[@role='combobox']//textarea",
+        "//textarea",  # Broader fallback
+    )
+
+    def _find_input_box(self):
+        """The AI Mode "Ask anything" box, or None. An element only counts
+        once it is clickable -- a found-but-hidden match (e.g. reCAPTCHA's
+        own response textarea on a CAPTCHA page) is not the input box."""
+        self.log("Looking for AI Mode input box...")
+        for selector in self._INPUT_SELECTORS:
+            try:
+                WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((By.XPATH, selector)))
+                element = WebDriverWait(self.driver, 5).until(EC.element_to_be_clickable((By.XPATH, selector)))
+                self.log(f"✓ Found input box with selector: {selector[:50]}...")
+                return element
+            except TimeoutException:
+                continue
+        return None
+
+    def _clear_captcha_if_present(self) -> bool:
+        """True if the page is clear to use: no CAPTCHA, or one that was
+        solved and moved on. False if it is still blocked."""
+        if not self._hit_captcha():
+            return True
+        if not self._wait_out_captcha():
+            return False
+        self._handle_cookies()
+        return True
+
+    @staticmethod
+    def _captcha_failed_result(question) -> dict:
+        return {
+            "question": question,
+            "answer": None,
+            "tables": [],
+            "raw_html": None,
+            "success": False,
+            "error": "captcha",
+            "captcha": True,
+            "format": None,
+        }
 
     def _wait_out_captcha(self) -> bool:
         """Runs the ported reCAPTCHA solver against the current challenge.
