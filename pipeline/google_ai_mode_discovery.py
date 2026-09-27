@@ -326,11 +326,17 @@ def build_category_diversity_query(mu: MarketUnderstanding, role_description: st
     same brief as context so the market definition and inclusion/exclusion
     rules still apply -- only the role focus changes."""
     if mu.brief.strip():
+        # Conditional on the brief: asked unconditionally, this query told AI
+        # Mode to list exactly the roles a brief had excluded (a China
+        # Bio-Based Ethylene brief excluded feedstock suppliers, catalyst
+        # makers and distributors; this query asked for "ONLY" those), which
+        # is where much of that run's off-market list came from.
         role_focused = (
             f"{_market_header(mu)}{mu.brief.strip()}\n\n"
             f"For this specific query, focus ONLY on identifying real, verifiable "
-            f"{role_description}. Do not list manufacturers or brand owners here -- "
-            f"only the role described above."
+            f"{role_description} -- but ONLY if the scope above allows that role. If the scope "
+            f"excludes it, reply with an empty JSON array []. Do not list manufacturers or brand "
+            f"owners here."
         )
         return ACCURACY_PREFIX + role_focused + ACCURACY_SUFFIX
 
@@ -374,10 +380,13 @@ def build_retry_query(mu: MarketUnderstanding, attempt: int, already_found: list
         f"{', '.join(recent)}.\nFind DIFFERENT companies, including smaller and lesser-known ones."
     )
     if attempt >= 3:
+        # Widening stays inside the brief's own rules: an unconditional
+        # "raw material suppliers ... distributors" pulled in roles a brief
+        # had explicitly excluded.
         exclusion_note += (
-            "\n\nThe obvious market leaders are likely covered. Widen into the supply chain: "
-            "raw material and component suppliers, tier-2 and regional producers, private-label "
-            "makers, and distributors -- only ones genuinely active in this market."
+            "\n\nThe obvious market leaders are likely covered. Widen to smaller, regional, tier-2 "
+            "and private-label players of the same kind, and to other roles (suppliers, "
+            "distributors) ONLY if the scope above allows them -- never a role it excludes."
         )
     return base + exclusion_note
 

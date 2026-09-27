@@ -45,14 +45,37 @@ ACCURACY_PREFIX = (
 
 
 def _build_verify_query(mu: MarketUnderstanding, batch: list[VerifiedCandidate]) -> str:
+    from pipeline.google_ai_mode_discovery import _fit_brief
+
     company_lines = "\n".join(f"- {c.name}" for c in batch)
-    scope_section = mu.brief.strip() if mu.brief.strip() else (
+    # Same length cap as discovery: a full segmentation brief plus 40 names
+    # and the relevance rule would otherwise push this query into the size
+    # range where AI Mode answers "Something went wrong".
+    scope_section = _fit_brief(mu.brief.strip()) if mu.brief.strip() else (
         f"{mu.market_name} ({mu.geography}). {mu.definition or ''}".strip()
     )
+    market = mu.market_name.strip() or "this market"
+    geography = mu.geography.strip() or "Global"
+    # Without a stated test, AI Mode read "is_relevant" as "connected to the
+    # topic": a real China Bio-Based Ethylene run kept 92 of 121 companies,
+    # and a manual check found only ~5% actually in that market -- bioethanol
+    # feedstock suppliers, conventional petrochemical makers, packaging firms
+    # and companies based outside China all passed. The market and geography
+    # are also stated here explicitly, not only via the brief.
     return (
         f"{ACCURACY_PREFIX}"
-        f"Market:\n\"\"\"\n{scope_section}\n\"\"\"\n\n"
+        f"Market: {market}\nGeography: {geography}\n\n"
+        f"Scope:\n\"\"\"\n{scope_section}\n\"\"\"\n\n"
         f"Companies:\n{company_lines}\n\n"
+        f"is_relevant is true ONLY if the company itself makes, supplies or sells the exact product of "
+        f"\"{market}\" as a real, current part of its business, and is active in {geography} "
+        f"(manufacturing, sales or established supply there). The scope's own include/exclude rules "
+        f"decide which roles count (e.g. whether distributors are wanted); where it says nothing, "
+        f"set is_relevant false for: raw-material or feedstock suppliers, makers of a conventional or "
+        f"different version of the product, downstream buyers and users, equipment, catalyst or "
+        f"technology providers, and companies with no activity in {geography}. Being in the same "
+        f"industry or value chain is not enough. If you cannot confirm the company is in this exact "
+        f"market, set is_relevant false and say why.\n\n"
         f"Cover every company above, none extra. Reply with ONLY a JSON array:\n"
         '[{"name":"exact name as given","is_relevant":true,"category":"Manufacturer",'
         '"brand_name":"","parent_or_independent":"Independent","country":"","reason":"one sentence"}]\n'
