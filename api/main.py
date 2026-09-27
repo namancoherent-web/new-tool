@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # to confirm from the running app (no git command needed) whether a given
 # laptop is actually on the latest code after running update.bat -- printed
 # loudly at startup and exposed via /api/health.
-BUILD_VERSION = "2026-09-15-01-chromedriver-cache-and-200-floor"
+BUILD_VERSION = "2026-09-28-01-no-extension-captcha-200plus-25min"
 logger.info("=" * 60)
 logger.info("Market Universe Finder API starting -- BUILD_VERSION: %s", BUILD_VERSION)
 logger.info("=" * 60)
@@ -194,7 +194,9 @@ def _run_summary(state: RunState) -> dict:
                 "is_relevant": "yes" if c.is_relevant else "no",
                 "category": c.category,
             }
-            for c in r.companies[:200]
+            # Matches the largest final list a run can return (300, global),
+            # so the on-screen table never stops short of the count shown.
+            for c in r.companies[:300]
         ]
         summary["download_formats"] = list(r.output_paths.keys())
     elif state.status == "error":

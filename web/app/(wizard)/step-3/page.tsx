@@ -41,8 +41,13 @@ const STAGE_ORDER = [
 
 function progressPercent(progressLog: { stage: string }[] | undefined): number {
   if (!progressLog || progressLog.length === 0) return 4; // just started
-  const lastStage = progressLog[progressLog.length - 1].stage;
-  const idx = STAGE_ORDER.indexOf(lastStage);
+  // Status-only stages ("Relevant companies so far", "Time limit reached",
+  // "Capping"...) aren't checkpoints; matching only the very last entry sent
+  // the bar back to 4% whenever one arrived. Use the latest known checkpoint.
+  let idx = -1;
+  for (let i = progressLog.length - 1; i >= 0 && idx === -1; i--) {
+    idx = STAGE_ORDER.indexOf(progressLog[i].stage);
+  }
   if (idx === -1) return 4;
   // Reserve the first few percent for "already started" and the last few
   // for "not literally done yet" so the bar never looks static at 0% or
