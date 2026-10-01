@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ============================================
-echo  Market Universe Finder — updating
+echo  Market Universe Finder - updating
 echo ============================================
 echo.
 
@@ -16,7 +16,7 @@ if errorlevel 1 (
 )
 
 if not exist ".git" (
-    echo [Setup] This folder came from a ZIP file, not git yet — connecting
+    echo [Setup] This folder came from a ZIP file, not git yet - connecting
     echo         it to GitHub now so future updates can pull automatically.
     echo         This only needs to happen once.
     echo.
@@ -59,8 +59,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
+for /f "delims=" %%R in ('git rev-parse HEAD') do set "PRE_UPDATE_COMMIT=%%R"
+
 echo [Update] Applying the latest version (this overwrites any local edits
-echo          to the tool's own files — your .env file is not touched)...
+echo          to the tool's own files - your .env file is not touched)...
 git reset --hard origin/main
 if errorlevel 1 (
     echo [ERROR] Update failed to apply.
@@ -75,14 +77,36 @@ echo ============================================
 for /f "delims=" %%C in ('git log -1 --format^="%%h %%s"') do echo  Now on: %%C
 echo ============================================
 echo.
-echo [Update] Refreshing installed packages to match the new version...
-if exist ".venv\Scripts\python.exe" (
-    ".venv\Scripts\python.exe" -m pip install --quiet -r requirements.txt
+
+REM Only reinstall packages whose manifest actually changed in this update --
+REM npm install alone touches tens of thousands of files in web\node_modules,
+REM which is normal for Next.js but heavy on an older/slower laptop disk, so
+REM skip it on routine code-only updates where the dependency list didn't move.
+set "PY_DEPS_CHANGED=0"
+set "WEB_DEPS_CHANGED=0"
+git diff --quiet %PRE_UPDATE_COMMIT% HEAD -- requirements.txt
+if errorlevel 1 set "PY_DEPS_CHANGED=1"
+git diff --quiet %PRE_UPDATE_COMMIT% HEAD -- web/package.json web/package-lock.json
+if errorlevel 1 set "WEB_DEPS_CHANGED=1"
+
+if "%PY_DEPS_CHANGED%"=="1" (
+    echo [Update] requirements.txt changed -- refreshing Python packages...
+    if exist ".venv\Scripts\python.exe" (
+        ".venv\Scripts\python.exe" -m pip install --quiet -r requirements.txt
+    )
+) else (
+    echo [Update] Python dependencies unchanged -- skipping pip install.
 )
-if exist "web\node_modules" (
-    pushd web
-    call npm install
-    popd
+
+if "%WEB_DEPS_CHANGED%"=="1" (
+    echo [Update] package.json changed -- refreshing web packages...
+    if exist "web\node_modules" (
+        pushd web
+        call npm install
+        popd
+    )
+) else (
+    echo [Update] Web dependencies unchanged -- skipping npm install.
 )
 
 echo.
