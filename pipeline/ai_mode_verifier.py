@@ -56,6 +56,19 @@ def _build_verify_query(mu: MarketUnderstanding, batch: list[VerifiedCandidate])
     )
     market = mu.market_name.strip() or "this market"
     geography = mu.geography.strip() or "Global"
+    today = time.strftime("%d %B %Y")
+    # Roles worked out from the user's own brief during market understanding,
+    # so categories match how the brief describes the market (a UK
+    # connected-fleet reviewer rejected generic labels such as "Brand" or
+    # plain "Manufacturer" for a vehicle OEM's connected-fleet arm). The
+    # generic list is only the fallback.
+    roles = [r.strip() for r in (mu.ecosystem_functions or []) if r and r.strip()][:10]
+    categories = (
+        "one of " + "; ".join(roles) + "; or Other"
+        if roles else
+        "Manufacturer, Parent Company, Distributor, Supplier, Technology Provider, "
+        "Service Provider or Other"
+    )
     # Without a stated test, AI Mode read "is_relevant" as "connected to the
     # topic": a real China Bio-Based Ethylene run kept 92 of 121 companies,
     # and a manual check found only ~5% actually in that market -- bioethanol
@@ -77,10 +90,13 @@ def _build_verify_query(mu: MarketUnderstanding, batch: list[VerifiedCandidate])
         f"industry or value chain is not enough. If you cannot confirm the company is in this exact "
         f"market, set is_relevant false and say why.\n\n"
         f"Cover every company above, none extra. Reply with ONLY a JSON array:\n"
-        '[{"name":"exact name as given","is_relevant":true,"category":"Manufacturer",'
+        '[{"name":"exact name as given","is_relevant":true,"category":"","belongs_to":"",'
         '"brand_name":"","parent_or_independent":"Independent","country":"","reason":"one sentence"}]\n'
-        "category: Manufacturer, Parent Company, Distributor, Supplier, Technology Provider, "
-        "Brand, Retailer, Investor, Service Provider or Other. "
+        f"category: {categories}. "
+        "belongs_to: if the listed name is a brand, product line, division, trading style or "
+        "former name of another company (or that company has since been renamed or merged), the "
+        "current name of the company it belongs to; otherwise \"\". "
+        f"Today is {today}: use current ownership and names, not outdated ones. "
         # "Subsidiary of X" as a schema template got echoed back literally
         # ("Subsidiary of X" as the actual field value, several times in a
         # real run) instead of AI Mode substituting the real parent name.
@@ -255,6 +271,7 @@ def _parse_verify_json(answer_text: str) -> dict[str, dict]:
             "parent_or_independent": parent,
             "hq_country": str(row.get("country") or "").strip(),
             "reason": str(row.get("reason") or "").strip(),
+            "belongs_to": str(row.get("belongs_to") or "").strip(),
         }
     if results:
         logger.info("Parsed %d verdicts from AI Mode's JSON response", len(results))
@@ -512,6 +529,8 @@ def verify_and_classify_via_ai_mode(
             for i, batch in enumerate(round_batches):
                 query = _build_verify_query(mu, batch)
                 label = f"verify-batch-{round_start + i + 1}"
+                if round_start + i == 0:
+                    logger.info("Verification query sent to Google AI Mode (%s, %d chars):\n%s", label, len(query), query)
                 batch_names = {c.name.lower() for c in batch}
                 futures[executor.submit(_run_one_verify_batch, query, label)] = batch_names
 
@@ -566,8 +585,19 @@ def verify_and_classify_via_ai_mode(
                 brand_name=c.name, parent_or_independent="Independent",
             ))
             continue
+        # A brand, product line, division, trading style or former name is
+        # filed under the company it belongs to, so the deduplicator merges
+        # it with that company instead of listing both (a UK connected-fleet
+        # run had LeasePlan UK beside Ayvens, RoadHawk beside Trakm8,
+        # "Bridgestone Partner" beside Webfleet). The listed name is kept as
+        # the brand.
+        belongs_to = verdict.get("belongs_to", "")
+        if belongs_to and belongs_to.lower() not in {"none", "n/a", "-", (verdict["company_name"] or c.name).lower()}:
+            company_name, brand_name = belongs_to, verdict["company_name"] or c.name
+        else:
+            company_name, brand_name = verdict["company_name"] or c.name, verdict.get("brand_name") or c.name
         classified.append(ClassifiedCompany(
-            company_name=verdict["company_name"] or c.name,
+            company_name=company_name,
             website=c.domain,
             hq_country=verdict.get("hq_country", ""),
             operates_in_target_geography=True,
@@ -579,7 +609,7 @@ def verify_and_classify_via_ai_mode(
             evidence_source=c.source,
             source_url=c.url or f"https://{c.domain}",
             is_relevant=bool(verdict["is_relevant"]),
-            brand_name=verdict.get("brand_name") or c.name,
+            brand_name=brand_name,
             parent_or_independent=verdict.get("parent_or_independent") or "Independent",
         ))
 

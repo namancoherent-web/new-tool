@@ -188,8 +188,13 @@ def _fit_brief(brief: str) -> str:
     # discovery. A blunt tail-truncation was tried first and was wrong -- it
     # cut the independence and no-duplicate rules, which are exactly the
     # rules that keep the final list clean.
+    # Only a closing summary may go here. "Player selection criteria" and a
+    # region-relevance section used to be dropped too -- those ARE the rules
+    # deciding which companies belong, and losing them on long briefs let
+    # whole off-market categories (leasing, rental, repair firms in a UK
+    # connected-fleet run) into the results.
     if len(trimmed) > MAX_BRIEF_CHARS:
-        for heading in ("final validation", "player selection criteria", "north america relevance"):
+        for heading in ("final validation",):
             out, dropping_section = [], False
             for line in trimmed.splitlines():
                 low = line.strip().lower()
@@ -471,6 +476,9 @@ def _run_one_attempt(query: str, attempt_label: str) -> tuple[str, list]:
     rate_limit_retry_used = False
     generation_failures = 0
     other_failures = 0
+    # The exact text sent to Chrome, so a bad result can be traced back to
+    # what Google was actually asked, word for word.
+    logger.info("Query sent to Google AI Mode (%s, %d chars):\n%s", attempt_label, len(query), query)
 
     while True:
         profile_dir = str(Path(tempfile.gettempdir()) / f"ai_mode_profile_{uuid.uuid4().hex[:8]}")
