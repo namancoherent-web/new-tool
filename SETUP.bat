@@ -3,12 +3,12 @@ setlocal
 cd /d "%~dp0"
 
 echo ============================================
-echo  Market Universe Finder — one-time setup
+echo  Market Universe Finder - one-time setup
 echo ============================================
 echo.
 echo This will install anything missing (Git, Python, Node.js, Chromium)
 echo and then start the tool. This window may take several minutes the
-echo first time — that's normal. Don't close it.
+echo first time - that's normal. Don't close it.
 echo.
 
 where winget >nul 2>nul
@@ -25,7 +25,7 @@ if errorlevel 1 (
 echo [1/4] Checking Git...
 where git >nul 2>nul
 if errorlevel 1 (
-    echo        Not found — installing Git ^(this can take a minute^)...
+    echo        Not found - installing Git ^(this can take a minute^)...
     winget install --id Git.Git -e --silent --accept-source-agreements --accept-package-agreements
     call :refresh_path
 ) else (
@@ -35,7 +35,7 @@ if errorlevel 1 (
 echo [2/4] Checking Python...
 where python >nul 2>nul
 if errorlevel 1 (
-    echo        Not found — installing Python ^(this can take a minute^)...
+    echo        Not found - installing Python ^(this can take a minute^)...
     winget install --id Python.Python.3.12 -e --silent --accept-source-agreements --accept-package-agreements
     call :refresh_path
 ) else (
@@ -45,7 +45,7 @@ if errorlevel 1 (
 echo [3/4] Checking Node.js...
 where node >nul 2>nul
 if errorlevel 1 (
-    echo        Not found — installing Node.js ^(this can take a minute^)...
+    echo        Not found - installing Node.js ^(this can take a minute^)...
     winget install --id OpenJS.NodeJS.LTS -e --silent --accept-source-agreements --accept-package-agreements
     call :refresh_path
 ) else (
@@ -54,7 +54,7 @@ if errorlevel 1 (
 
 echo [4/4] Checking Chromium...
 if not exist "%LOCALAPPDATA%\Chromium\Application\chrome.exe" (
-    echo        Not found — installing Chromium ^(this can take a few minutes^)...
+    echo        Not found - installing Chromium ^(this can take a few minutes^)...
     winget install --id Hibbiki.Chromium -e --silent --accept-source-agreements --accept-package-agreements
 ) else (
     echo        Already installed.

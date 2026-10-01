@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ============================================
-echo  Market Universe Finder — starting up
+echo  Market Universe Finder - starting up
 echo ============================================
 echo.
 
@@ -75,12 +75,12 @@ echo Two new windows will open - leave them running while you use the tool.
 echo Close this window (or both new windows) to stop everything.
 echo.
 
-start "Market Universe Finder — backend" cmd /k ""%~dp0.venv\Scripts\python.exe" -m uvicorn api.main:app --host localhost --port 8000"
+start "Market Universe Finder - backend" cmd /k ""%~dp0.venv\Scripts\python.exe" -m uvicorn api.main:app --host localhost --port 8000"
 timeout /t 3 /nobreak >nul
-start "Market Universe Finder — web" cmd /k "cd /d "%~dp0web" && npm run dev"
+start "Market Universe Finder - web" cmd /k "cd /d "%~dp0web" && npm run dev"
 
 timeout /t 5 /nobreak >nul
 start "" "http://localhost:3000"
 
-echo Done. You can close this window now — the backend and web windows will keep running.
+echo Done. You can close this window now - the backend and web windows will keep running.
 pause
