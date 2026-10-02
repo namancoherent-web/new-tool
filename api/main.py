@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # to confirm from the running app (no git command needed) whether a given
 # laptop is actually on the latest code after running update.bat -- printed
 # loudly at startup and exposed via /api/health.
-BUILD_VERSION = "2026-09-28-01-no-extension-captcha-200plus-25min"
+BUILD_VERSION = "2026-10-03-01-strict-verify-brief-rules-kept"
 logger.info("=" * 60)
 logger.info("Market Universe Finder API starting -- BUILD_VERSION: %s", BUILD_VERSION)
 logger.info("=" * 60)
