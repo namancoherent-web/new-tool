@@ -23,3 +23,17 @@ cache/
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Never publish: secrets, chat history, client data, run results.
+# (This repo is public; the team pulls it with update.bat.)
+.env
+.env.*
+!.env.example
+CLAUDE.md
+CLAUDE_HANDOFF/
+outside_repo_files/
+outputs/
+logs/
+*.log
+*.zip
+ai_mode_page.html

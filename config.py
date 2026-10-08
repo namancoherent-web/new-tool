@@ -29,18 +29,19 @@ class Config:
 
     # Google AI Mode discovery (Selenium-driven, non-headless by default --
     # headless triggers Google's reCAPTCHA bot-detection instantly, a real
-    # visible browser with a persistent profile does not). Off by default
-    # since it opens a visible browser window and is much slower than the
-    # HTTP-based sources; enable explicitly when needed.
-    google_ai_mode_enabled: bool = field(default_factory=lambda: _bool("GOOGLE_AI_MODE_ENABLED", False))
+    # visible browser with a persistent profile does not). On by default and
+    # the only source: these defaults must match the shipped behaviour on
+    # their own, because a laptop can end up with no .env (update.bat
+    # deletes it once .env stops being tracked in the repo).
+    google_ai_mode_enabled: bool = field(default_factory=lambda: _bool("GOOGLE_AI_MODE_ENABLED", True))
     google_ai_mode_headless: bool = field(default_factory=lambda: _bool("GOOGLE_AI_MODE_HEADLESS", False))
     # When true and google_ai_mode_enabled is also true, AI Mode becomes the
     # ONLY discovery source -- DDG/Wikipedia/Wikidata/directory-mining are
     # skipped entirely rather than used as backfill. Explicit user choice:
     # accepts slower runs and fewer companies per run in exchange for
     # avoiding DDG's anti-bot blocking issues altogether.
-    google_ai_mode_only: bool = field(default_factory=lambda: _bool("GOOGLE_AI_MODE_ONLY", False))
-    google_ai_mode_max_queries: int = field(default_factory=lambda: _int("GOOGLE_AI_MODE_MAX_QUERIES", 3))
+    google_ai_mode_only: bool = field(default_factory=lambda: _bool("GOOGLE_AI_MODE_ONLY", True))
+    google_ai_mode_max_queries: int = field(default_factory=lambda: _int("GOOGLE_AI_MODE_MAX_QUERIES", 22))
     # How many real Chromium windows are allowed open at once for discovery
     # and verification. Each one is a full browser process -- on a low-spec
     # laptop (e.g. an older i3 with 8GB RAM, the actual hardware this tool
